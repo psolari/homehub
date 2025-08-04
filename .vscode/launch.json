@@ -1,0 +1,51 @@
+{
+  "version": "0.2.0",
+  "compounds": [
+    {
+      "name": "Launch Backend and Frontend",
+      "configurations": ["Launch Django Backend", "Launch React Frontend"]
+    }
+  ],
+  "configurations": [
+    {
+      "name": "Launch Django Backend",
+      "type": "python",
+      "request": "launch",
+      "program": "${workspaceFolder}/backend/manage.py",
+      "args": [
+        "runserver",
+        "0.0.0.0:8000"
+      ],
+      "django": true,
+      "justMyCode": true,
+      "console": "integratedTerminal",
+      "env": {
+        "DJANGO_SETTINGS_MODULE": "smart_home_backend.settings"
+      },
+      "useShellExecute": false,
+      "consoleOptions": {
+        "name": "Backend"
+      }
+    },
+    {
+      "name": "Launch React Frontend",
+      "type": "pwa-node",
+      "request": "launch",
+      "runtimeExecutable": "npm",
+      "runtimeArgs": ["run", "dev"],
+      "cwd": "${workspaceFolder}/frontend",
+      "console": "integratedTerminal",
+      "serverReadyAction": {
+        "pattern": "Local:",
+        "uriFormat": "http://localhost:5173",
+        "action": "openExternally"
+      },
+      "internalConsoleOptions": "neverOpen",
+      "restart": true,
+      "useShellExecute": false,
+      "consoleOptions": {
+        "name": "Frontend"
+      }
+    }
+  ]
+}
