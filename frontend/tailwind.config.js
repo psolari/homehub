@@ -5,7 +5,12 @@ module.exports = {
     "./src/**/*.{js,ts,jsx,tsx}",
   ],
   theme: {
-    extend: {},
+    extend: {
+      fontFamily: {
+        futuristic: ['"Audiowide"', 'sans-serif'], // For headings
+        body: ['"Exo 2"', 'sans-serif'], // For everything else
+      },
+    },
   },
   plugins: [],
 }

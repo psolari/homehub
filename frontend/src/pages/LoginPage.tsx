@@ -22,13 +22,14 @@ const LoginPage = () => {
     if (login.fulfilled.match(result)) {
       navigate('/');
     } else {
+      console.log(result)
       setError(result.payload || 'Login failed');
     }
   };
 
   return (
-    <div className="min-h-screen w-full bg-gradient-to-br from-blue-900 via-blue-800 to-blue-600 flex items-center justify-center px-4">
-      <div className="bg-white rounded-xl shadow-lg p-8 max-w-md w-full text-center">
+    <div className="w-full h-full flex items-center justify-center px-4">
+      <div className="bg-gray-200 rounded-xl shadow-lg p-8 max-w-md w-full text-center">
         <h2 className="mb-6 text-2xl font-semibold text-blue-900">Home Hub Login</h2>
 
         {error && <p className="text-red-600 text-sm mb-4">{error}</p>}
