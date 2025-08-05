@@ -1,20 +1,25 @@
 import { useEffect } from 'react';
-import { useSelector, useDispatch } from 'react-redux';
-import {
-  fetchDevices,
-  createDevice,
-  updateDevice,
-  deleteDevice,
-  type Device,
-} from './redux/slices/devicesSlice';
+import { useDispatch, useSelector } from 'react-redux';
 import type { RootState, AppDispatch } from './redux/store';
+import {
+  devicesActions,
+  devicesSelectors,
+} from './redux/slices/DevicesSlice';
+import type { Device } from './redux/slices/DevicesSlice';
 
 const DeviceTest = () => {
   const dispatch = useDispatch<AppDispatch>();
-  const { devices, loading, error } = useSelector((state: RootState) => state.devices);
+
+  const devices = useSelector(devicesSelectors.selectAll);
+  const loading = useSelector(
+    (state: RootState) => (state.devices as any).list.loading
+  );
+  const error = useSelector(
+    (state: RootState) => (state.devices as any).list.error
+  );
 
   useEffect(() => {
-    dispatch(fetchDevices());
+    dispatch(devicesActions.getList());
   }, [dispatch]);
 
   const handleCreate = () => {
@@ -28,18 +33,18 @@ const DeviceTest = () => {
       config_schema: {},
       metadata: {},
     };
-    dispatch(createDevice(dummyDevice));
+    dispatch(devicesActions.createOne(dummyDevice));
   };
 
   const handleUpdate = () => {
     if (devices.length === 0) return;
     const first = devices[0];
-    dispatch(updateDevice({ id: first.id, name: `${first.name} (Updated)` }));
+    dispatch(devicesActions.updateOne({ id: first.id, data: { name: `${first.name} (Updated)` } }));
   };
 
   const handleDelete = () => {
     if (devices.length === 0) return;
-    dispatch(deleteDevice(devices[0].id));
+    dispatch(devicesActions.deleteOne(devices[0].id));
   };
 
   if (loading) return <p>Loading devices...</p>;

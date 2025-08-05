@@ -1,23 +1,22 @@
-import { getBackendUrls } from '../utils/url';
+// src/api/ApiService.ts
+import { getBackendUrls } from "../utils/url";
+import { ApiError } from "./ApiError";
 
-class ApiService {
+export class ApiService {
   static async request(
-    method: string = "GET",
+    method: string,
     endpoint: string,
     body: object | null = null,
-    headers: Record<string, string> = {}  // This is just a type, not a value
+    headers: Record<string, string> = {}
   ) {
-    const username = 'admin';
-    const password = 'admin';
-    const basicAuth = 'Basic ' + btoa(username + ':' + password);
-    const defaultHeaders = {
-      "Authorization": basicAuth,
-      "Content-Type": "application/json",
-    };
     const { apiUrl } = getBackendUrls();
     const fullUrl = apiUrl + endpoint;
 
-    const finalHeaders = { ...defaultHeaders, ...headers };
+    const finalHeaders = {
+      "Content-Type": "application/json",
+      ...headers,
+    };
+
     const config: RequestInit = {
       method,
       headers: finalHeaders,
@@ -31,13 +30,11 @@ class ApiService {
 
     if (!response.ok) {
       const errorData = await response.json();
-      throw new Error(errorData.error || "API error");
+      throw new ApiError(errorData.error || "API error", errorData);
     }
 
-    if (response.status === 204) return true; // no content
+    if (response.status === 204) return true;
 
     return response.json();
   }
 }
-
-export default ApiService;
