@@ -3,15 +3,12 @@ import {
   createAsyncThunk,
   createEntityAdapter,
 } from "@reduxjs/toolkit";
-import type {
-  ActionReducerMapBuilder,
-  EntityState
-} from "@reduxjs/toolkit";
+import type { ActionReducerMapBuilder, EntityState } from "@reduxjs/toolkit";
 import { toast } from "react-toastify";
 
 import { ApiError } from "../../api/ApiError";
 import { ApiService } from "../../api/ApiService";
-
+import { logout } from "./AuthSlice";
 
 export type GenericModel = {
   modelName: string;
@@ -66,7 +63,7 @@ export function createModelSlice<T extends { id: string }>({
           return rejectWithValue(error.message);
         }
         return rejectWithValue("Unknown error");
-            }
+      }
     },
   );
 
@@ -123,9 +120,16 @@ export function createModelSlice<T extends { id: string }>({
 
   const updateOneThunk = createAsyncThunk(
     `${modelName}/updateOne`,
-    async ({ id, data }: { id: string; data: Record<string, unknown> }, { rejectWithValue }) => {
+    async (
+      { id, data }: { id: string; data: Record<string, unknown> },
+      { rejectWithValue },
+    ) => {
       try {
-        const response = await ApiService.request("PATCH", `${endpoint}/${id}/`, data);
+        const response = await ApiService.request(
+          "PATCH",
+          `${endpoint}/${id}/`,
+          data,
+        );
         return response;
       } catch (error) {
         if (error instanceof ApiError) {
@@ -167,7 +171,7 @@ export function createModelSlice<T extends { id: string }>({
       },
       clearSelectedRow(state) {
         state.selectedRow = null;
-      }
+      },
     },
     extraReducers: (builder) => {
       builder
@@ -232,8 +236,38 @@ export function createModelSlice<T extends { id: string }>({
         .addCase(updateOneThunk.pending, (state) => {
           state.options.loading = true;
           state.options.error = null;
+        })
+        .addCase(updateOneThunk.fulfilled, (state, action) => {
+          entityAdapter.upsertOne(state, action.payload);
+          state.options.loading = false;
+          state.options.error = null;
+          toast.success(`${modelName} updated successfully`);
+        })
+        .addCase(updateOneThunk.rejected, (state, action) => {
+          state.options.loading = false;
+          state.options.error = action.payload as string;
+          toast.error(`Failed to update ${modelName}: ${action.payload}`);
+        })
+        .addCase(deleteOneThunk.pending, (state) => {
+          state.options.loading = true;
+          state.options.error = null;
+        })
+        .addCase(deleteOneThunk.fulfilled, (state, action) => {
+          entityAdapter.removeOne(state, action.payload);
+          state.options.loading = false;
+          state.options.error = null;
+          toast.success(`${modelName} deleted successfully`);
+        })
+        .addCase(deleteOneThunk.rejected, (state, action) => {
+          state.options.loading = false;
+          state.options.error = action.payload as string;
+          toast.error(`Failed to delete ${modelName}: ${action.payload}`);
+        })
+        .addCase(logout.fulfilled, () => {
+          return initialState; // Reset state on logout
         });
-      additionalReducers?.(builder);}
+      additionalReducers?.(builder);
+    },
   });
 
   return {
@@ -250,7 +284,8 @@ export function createModelSlice<T extends { id: string }>({
       deleteOne: deleteOneThunk,
     },
     selectors: entityAdapter.getSelectors(
-      (state: unknown) => (state as Record<string, EntityState<T, string>>)[modelName]
+      (state: unknown) =>
+        (state as Record<string, EntityState<T, string>>)[modelName],
     ),
-        };
+  };
 }

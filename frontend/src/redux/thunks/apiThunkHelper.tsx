@@ -9,7 +9,7 @@ export async function callApiWithAuth(
   getState: () => RootState,
   endpoint: string,
   method: string = "GET",
-  body: object | null = null
+  body: object | null = null,
 ) {
   let token = selectAccessToken(getState());
 

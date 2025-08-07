@@ -1,21 +1,15 @@
 import { createModelSlice } from "./CreateModelSlice";
 
-export type Device = {
+export type FloorPlan = {
   id: string;
   name: string;
   description: string;
-  room: string;
-  device_type: string;
-  status: string;
-  floorplan_object_id: string;
-  credentials: object;
-  config_schema: object;
-  metadata: object;
+  svg_data: string;
 };
 
-const devicesSlice = createModelSlice<Device>({
-  modelName: "devices",
-  endpoint: "/devices",
+const floorPlansSlice = createModelSlice<FloorPlan>({
+  modelName: "floorplans",
+  endpoint: "/floorplans",
   // permissions: {
   //   view: 'devices.view_device',
   //   add: 'devices.add_device',
@@ -28,6 +22,6 @@ const devicesSlice = createModelSlice<Device>({
   // },
 });
 
-export default devicesSlice.slice;
-export const devicesActions = devicesSlice.actions;
-export const devicesSelectors = devicesSlice.selectors;
+export default floorPlansSlice.slice;
+export const floorPlansActions = floorPlansSlice.actions;
+export const floorPlansSelectors = floorPlansSlice.selectors;

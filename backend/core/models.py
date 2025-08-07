@@ -44,18 +44,29 @@ class Device(models.Model):
     room = models.ForeignKey(
         Room, related_name="devices", on_delete=models.CASCADE, null=True, blank=True
     )
-    device_type = models.CharField(max_length=50)  # e.g., 'light', 'thermostat', etc.
+    static_ip = models.BooleanField(
+        default=False, help_text="Is the device using a static IP address?"
+    )
+    ip_address = models.GenericIPAddressField(
+        protocol="both", unpack_ipv4=True, blank=True, null=True
+    )
+    mac_address = models.CharField(max_length=17, blank=True, null=True)
+    device_type = models.CharField(max_length=50)
     status = models.CharField(max_length=10, choices=STATUS_CHOICES, default="off")
     floorplan_object_id = models.CharField(max_length=100, blank=True, null=True)
-    credentials = models.JSONField(
-        blank=True, null=True
-    )  # Store device credentials as JSON
-    config_schema = models.JSONField(
-        blank=True, null=True
-    )  # Store device configuration schema as JSON
-    metadata = models.JSONField(
-        blank=True, null=True
-    )  # Store additional metadata as JSON
+    config = models.JSONField(blank=True, null=True)
+    metadata = models.JSONField(blank=True, null=True)
+
+    hidden_fields = [
+        "mac_address",
+        "device_type",
+        "status",
+        "floorplan_object_id",
+        "config",
+        "metadata",
+        "room",
+        "id",
+    ]
 
     def __str__(self):
         return self.name

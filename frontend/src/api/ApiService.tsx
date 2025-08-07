@@ -7,7 +7,7 @@ export class ApiService {
     method: string,
     endpoint: string,
     body: object | null = null,
-    headers: Record<string, string> = {}
+    headers: Record<string, string> = {},
   ) {
     const { apiUrl } = getBackendUrls();
     const fullUrl = apiUrl + endpoint;

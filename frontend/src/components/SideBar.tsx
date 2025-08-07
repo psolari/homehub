@@ -1,15 +1,25 @@
-import { mdiCog, mdiFloorPlan, mdiRemoteTv, mdiLogout } from '@mdi/js';
-import Icon from '@mdi/react';
+import {
+  mdiCog,
+  mdiFloorPlan,
+  mdiRemoteTv,
+  mdiLogout,
+  mdiDevices,
+} from "@mdi/js";
+import Icon from "@mdi/react";
+import { Link, useNavigate } from "react-router-dom";
 
 const menuItems = [
-  { icon: mdiFloorPlan, name: 'Floor Plan', link: '/floor-plan' },
-  { icon: mdiRemoteTv, name: 'TV Controls', link: '/tv-controls' },
-  { icon: mdiCog, name: 'Settings', link: '/settings' },
+  { icon: mdiDevices, name: "Devices", link: "/devices" },
+  { icon: mdiFloorPlan, name: "Floor Plan", link: "/floorplans" },
+  { icon: mdiRemoteTv, name: "TV Controls", link: "/tv-controls" },
+  { icon: mdiCog, name: "Settings", link: "/settings" },
 ];
 
 const SideBar = () => {
+  const navigate = useNavigate();
+
   const handleLogout = () => {
-    window.location.href = '/logout';
+    navigate("/logout");
   };
 
   return (
@@ -19,20 +29,31 @@ const SideBar = () => {
       >
         <ul className="menu list-none pt-12">
           {menuItems.map((item, index) => (
-            <li key={index} className="menu-item p-2 pl-3 hover:bg-sky-900 h-10">
-              <a href={item.link} className="text-white no-underline flex items-center text-nowrap">
-                <Icon className='flex-shrink-0' path={item.icon} size={0.8} />
-              </a>
+            <li key={index} className="menu-item h-10">
+              <Link
+                to={item.link}
+                className="flex items-center w-full h-full p-2 pl-3 text-white no-underline hover:bg-sky-900"
+              >
+                <Icon
+                  className="flex-shrink-0 ml-0.5"
+                  path={item.icon}
+                  size={0.8}
+                />
+              </Link>
             </li>
           ))}
         </ul>
-        <div className="absolute bottom-0 w-full p-2 pl-3 hover:bg-red-700 h-10">
+        <div className="absolute bottom-0 w-full h-10">
           <button
             onClick={handleLogout}
-            className="menu-button flex items-center w-full text-left text-white no-underline cursor-pointer"
+            className="flex items-center w-full h-full p-2 pl-3 text-white no-underline hover:bg-red-700 cursor-pointer"
             type="button"
           >
-            <Icon className="flex-shrink-0" path={mdiLogout} size={0.8} />
+            <Icon
+              className="flex-shrink-0 ml-0.5 mt-1"
+              path={mdiLogout}
+              size={0.8}
+            />
           </button>
         </div>
       </div>

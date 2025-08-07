@@ -1,8 +1,4 @@
-const setCookie = (
-  name: string,
-  value: string,
-  expiresInSeconds: number
-) => {
+const setCookie = (name: string, value: string, expiresInSeconds: number) => {
   const expires = new Date(expiresInSeconds * 1000).toUTCString();
   document.cookie = `${name}=${encodeURIComponent(value)}; expires=${expires}; path=/; SameSite=Lax; Secure`;
 };

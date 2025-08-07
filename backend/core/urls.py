@@ -7,6 +7,7 @@ from django.urls import path
 from rest_framework import routers
 from .views import (
     DeviceViewSet,
+    DeviceTypesView,
     FloorPlanViewSet,
     RoomViewSet,
     UserViewSet,
@@ -21,6 +22,7 @@ router.register(r"devices", DeviceViewSet, basename="device")
 urlpatterns = [
     path("token/", TokenObtainPairView.as_view(), name="token_obtain_pair"),
     path("token/refresh/", TokenRefreshView.as_view(), name="token_refresh"),
+    path("device-types/", DeviceTypesView.as_view(), name="device_types"),
 ]
 
 urlpatterns += router.urls

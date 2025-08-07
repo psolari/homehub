@@ -38,16 +38,18 @@ export const login = createAsyncThunk<
       "POST",
       "/token/",
       { username, password },
-      {}
+      {},
     );
     const access = response.access;
     const refresh = response.refresh;
 
     // Save cookies with expiry
     const decodedAccessPayload = decodePayload(access);
-    if (decodedAccessPayload) setCookie("accessToken", access, decodedAccessPayload.exp);
+    if (decodedAccessPayload)
+      setCookie("accessToken", access, decodedAccessPayload.exp);
     const decodedRefreshPayload = decodePayload(refresh);
-    if (decodedRefreshPayload) setCookie("refreshToken", refresh, decodedRefreshPayload.exp);
+    if (decodedRefreshPayload)
+      setCookie("refreshToken", refresh, decodedRefreshPayload.exp);
 
     return { access, refresh };
   } catch (error) {
@@ -57,47 +59,55 @@ export const login = createAsyncThunk<
   }
 });
 
-export const logout = createAsyncThunk("auth/logout", async (_, { dispatch }) => {
-  dispatch(authSlice.actions.clearAuthState());
-  deleteCookie("accessToken");
-  deleteCookie("refreshToken");
-  deleteCookie("sessionid");
-  window.location.href = "/login";
-  return {};
-});
+export const logout = createAsyncThunk(
+  "auth/logout",
+  async (_, { dispatch }) => {
+    dispatch(authSlice.actions.clearAuthState());
+    deleteCookie("accessToken");
+    deleteCookie("refreshToken");
+    deleteCookie("sessionid");
+    sessionStorage.removeItem("appInitialised");
+    window.location.href = "/login";
+    return {};
+  },
+);
 
 export const refreshAccessToken = createAsyncThunk<
   { access: string },
   void,
   { state: RootState; rejectValue: string }
->("auth/refreshAccessToken", async (_, { getState, rejectWithValue, dispatch }) => {
-  const state = getState();
-  const refreshToken = state.auth.refreshToken;
+>(
+  "auth/refreshAccessToken",
+  async (_, { getState, rejectWithValue, dispatch }) => {
+    const state = getState();
+    const refreshToken = state.auth.refreshToken;
 
-  if (!refreshToken || isTokenExpired(refreshToken)) {
-    dispatch(logout());
-    return rejectWithValue("Refresh token expired");
-  }
+    if (!refreshToken || isTokenExpired(refreshToken)) {
+      dispatch(logout());
+      return rejectWithValue("Refresh token expired");
+    }
 
-  try {
-    const response = await UnAuthApiService.request(
-      "POST",
-      "/token/refresh/",
-      { refresh: refreshToken },
-      {}
-    );
+    try {
+      const response = await UnAuthApiService.request(
+        "POST",
+        "/token/refresh/",
+        { refresh: refreshToken },
+        {},
+      );
 
-    const access = response.access;
-    const decodedAccessPayload = decodePayload(access);
-    if (decodedAccessPayload) setCookie("accessToken", access, decodedAccessPayload.exp);
+      const access = response.access;
+      const decodedAccessPayload = decodePayload(access);
+      if (decodedAccessPayload)
+        setCookie("accessToken", access, decodedAccessPayload.exp);
 
-    return { access };
-  } catch (error) {
-    if (error instanceof ApiError) return rejectWithValue(error.message);
-    if (error instanceof Error) return rejectWithValue(error.message);
-    return rejectWithValue("Unknown error");
-  }
-});
+      return { access };
+    } catch (error) {
+      if (error instanceof ApiError) return rejectWithValue(error.message);
+      if (error instanceof Error) return rejectWithValue(error.message);
+      return rejectWithValue("Unknown error");
+    }
+  },
+);
 
 // Slice
 export const authSlice = createSlice({

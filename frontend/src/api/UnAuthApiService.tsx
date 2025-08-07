@@ -6,7 +6,7 @@ class UnAuthApiService {
     method: string = "GET",
     endpoint: string,
     body: object | null = null,
-    headers: Record<string, string> = {}
+    headers: Record<string, string> = {},
   ) {
     const { apiUrl } = getBackendUrls();
 

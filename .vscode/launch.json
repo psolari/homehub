@@ -17,7 +17,7 @@
         "0.0.0.0:8000"
       ],
       "django": true,
-      "justMyCode": true,
+      "justMyCode": false,
       "console": "integratedTerminal",
       "env": {
         "DJANGO_SETTINGS_MODULE": "smart_home_backend.settings"

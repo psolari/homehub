@@ -3,7 +3,7 @@ export class ApiError extends Error {
 
   constructor(message: string, responseData?: unknown) {
     super(message);
-    this.name = 'ApiError';
+    this.name = "ApiError";
     this.responseData = responseData;
   }
 }

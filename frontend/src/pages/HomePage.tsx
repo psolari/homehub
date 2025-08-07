@@ -1,14 +1,26 @@
-import { useNavigate } from 'react-router-dom';
-import { mdiHome, mdiWifi, mdiCog, mdiPower } from '@mdi/js';
-import Icon from '@mdi/react';
+import { useNavigate } from "react-router-dom";
+import { mdiHome, mdiWifi, mdiCog, mdiPower } from "@mdi/js";
+import Icon from "@mdi/react";
 
 export default function HomePage() {
   const navigate = useNavigate();
 
   const actions = [
-    { icon: <Icon path={mdiWifi} size={1.5} />, label: "Devices", path: "/devices" },
-    { icon: <Icon path={mdiCog} size={1.5} />, label: "Settings", path: "/settings" },
-    { icon: <Icon path={mdiPower} size={1.5} />, label: "Shutdown", path: "/shutdown" },
+    {
+      icon: <Icon path={mdiWifi} size={1.5} />,
+      label: "Devices",
+      path: "/devices",
+    },
+    {
+      icon: <Icon path={mdiCog} size={1.5} />,
+      label: "Settings",
+      path: "/settings",
+    },
+    {
+      icon: <Icon path={mdiPower} size={1.5} />,
+      label: "Shutdown",
+      path: "/shutdown",
+    },
   ];
 
   return (
@@ -25,7 +37,8 @@ export default function HomePage() {
           Welcome to HomeHub
         </h1>
         <p className="text-zinc-400 text-lg max-w-xl">
-          Control and monitor your smart home from one beautiful, simple interface.
+          Control and monitor your smart home from one beautiful, simple
+          interface.
         </p>
       </div>
 
@@ -34,7 +47,7 @@ export default function HomePage() {
           <button
             key={index}
             onClick={() => navigate(action.path)}
-            className="bg-zinc-800 border border-zinc-700 hover:border-blue-500 hover:shadow-xl hover:scale-105 transition-all rounded-xl p-6 text-center flex flex-col items-center gap-3"
+            className="bg-zinc-800 border border-zinc-700 hover:border-cyan-500 hover:shadow-xl hover:scale-105 transition-all rounded-xl p-6 text-center flex flex-col items-center gap-3"
           >
             {action.icon}
             <span className="text-lg font-medium">{action.label}</span>
