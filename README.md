@@ -115,7 +115,7 @@ Open `http://localhost:5173`.
 
 Discovery is the default workflow. HomeHub scans the local `/24` network unless a CIDR is supplied, probes known local protocols, uses Sonos/Cast discovery APIs, and queries configured Hive/Ring/Alexa accounts. A scan is capped at 512 hosts.
 
-Selecting a discovered device now opens its integration-specific setup wizard rather than immediately inserting it into the database. The wizard is generated from the backend driver contract and can request pairing approval, local credentials, cloud accounts, optional services such as Spotify and advanced integration settings.
+Selecting a discovered device opens its integration-specific setup wizard rather than immediately inserting it into the database. The wizard is generated from the backend driver contract and can request pairing approval, local credentials, cloud accounts, optional services such as Spotify and advanced integration settings.
 
 For integrations that support an active connection test, **Test & add** must successfully pair/authenticate and read device state before the device is created. Failed onboarding therefore remains in the wizard and does not leave a new broken device row behind.
 
@@ -131,7 +131,7 @@ Devices already present in an error state display **Finish setup**. This reopens
 
 - **LG webOS** — supply the IP, approve HomeHub on the TV on first connection, and optionally add the MAC address for Wake-on-LAN.
 - **Samsung Tizen** — supply the IP, approve the HomeHub pairing prompt, and HomeHub stores the resulting token encrypted; MAC is optional but required for Wake-on-LAN power-on.
-- **Roomba** — supply the robot IP and BLID, then enter the local robot password or use the wizard's password-retrieval action while a supported robot is on its dock and in pairing mode.
+- **Roomba** — supply the robot IP and BLID, then enter the local robot password or use the wizard's password-retrieval action while a supported robot is on its dock and in pairing mode. Local credential retrieval support varies by robot firmware/model.
 - **Sonos / Google Cast** — verify the local speaker and optionally link a Spotify integration account.
 - **Alexa / Hive / Ring** — choose or configure the relevant cloud integration account inside the wizard; device-specific account identifiers are normally supplied by cloud discovery.
 - **Ring Alarm** — choose/configure the MQTT bridge and alarm topic; the setup test authenticates to the broker without sending an arm/disarm command.
