@@ -5,6 +5,7 @@ HomeHub is a local-first smart-home controller built with Django REST Framework 
 ## Current capabilities
 
 - Automatic LAN discovery, with manual device onboarding as a fallback.
+- Driver-driven setup wizards for pairing, local device credentials, cloud accounts and connection testing.
 - Generic device capability/control API and generic React control rendering.
 - LG webOS and Samsung Tizen TV control.
 - iRobot Roomba cleaning controls and floor-plan location reporting where supported by the robot firmware.
@@ -14,7 +15,7 @@ HomeHub is a local-first smart-home controller built with Django REST Framework 
 - Hive heating control.
 - Ring camera/doorbell integration and camera snapshots.
 - Ring Alarm control through a configurable MQTT bridge.
-- Interactive browser floor-plan editor with walls, doors, windows, furniture and linked devices.
+- Room-first interactive browser floor-plan editor with snapping, drag-resizing, a household-object library and linked devices.
 - Live device state on floor plans, including moving-device coordinates supplied by integrations.
 - Customisable Home Assistant-style dashboard cards with selectable quick controls and full control dialogs.
 - Django users remain in the backend for future use, but household mode currently has no frontend login gate.
@@ -82,13 +83,15 @@ npm ci
 cd ..
 ```
 
-Load the root environment file before running Django:
+Load the root environment file before running Django from a normal terminal:
 
 ```bash
 set -a
 source .env
 set +a
 ```
+
+The checked-in VS Code launch configuration loads the root `.env` automatically.
 
 Backend:
 
@@ -108,23 +111,42 @@ Open `http://localhost:5173`.
 
 ## Device onboarding
 
-### Discovery
+### Discovery-first setup
 
 Discovery is the default workflow. HomeHub scans the local `/24` network unless a CIDR is supplied, probes known local protocols, uses Sonos/Cast discovery APIs, and queries configured Hive/Ring/Alexa accounts. A scan is capped at 512 hosts.
 
-### Manual
+Selecting a discovered device now opens its integration-specific setup wizard rather than immediately inserting it into the database. The wizard is generated from the backend driver contract and can request pairing approval, local credentials, cloud accounts, optional services such as Spotify and advanced integration settings.
 
-Manual onboarding lets you select a generic device category or a known integration, then enter the address and integration-specific configuration. Generic devices are accepted even when HomeHub does not have an active control protocol for them.
+For integrations that support an active connection test, **Test & add** must successfully pair/authenticate and read device state before the device is created. Failed onboarding therefore remains in the wizard and does not leave a new broken device row behind.
+
+### Manual setup
+
+Manual onboarding uses the same wizard. Choose a generic category or known driver, then complete the steps advertised by that driver. Generic devices can still be represented even when HomeHub does not have an active control protocol for them; those drivers deliberately skip the connection test rather than pretending control is available.
+
+### Repairing an existing device
+
+Devices already present in an error state display **Finish setup**. This reopens the same driver wizard with existing non-secret configuration prefilled. HomeHub exposes only the names of already-stored secret fields, so the wizard can preserve an encrypted token/password without revealing it to the browser.
+
+### Examples
+
+- **LG webOS** — supply the IP, approve HomeHub on the TV on first connection, and optionally add the MAC address for Wake-on-LAN.
+- **Samsung Tizen** — supply the IP, approve the HomeHub pairing prompt, and HomeHub stores the resulting token encrypted; MAC is optional but required for Wake-on-LAN power-on.
+- **Roomba** — supply the robot IP and BLID, then enter the local robot password or use the wizard's password-retrieval action while a supported robot is on its dock and in pairing mode.
+- **Sonos / Google Cast** — verify the local speaker and optionally link a Spotify integration account.
+- **Alexa / Hive / Ring** — choose or configure the relevant cloud integration account inside the wizard; device-specific account identifiers are normally supplied by cloud discovery.
+- **Ring Alarm** — choose/configure the MQTT bridge and alarm topic; the setup test authenticates to the broker without sending an arm/disarm command.
 
 ## Cloud integrations
 
-Open **Integrations** in the frontend. Credentials are encrypted before they are stored in the database.
+Cloud credentials can be managed either from **Integrations** or inline from a device setup wizard. Credentials are encrypted before they are stored in the database.
 
 Spotify uses OAuth and Spotify Connect. Alexa and Ring rely on unofficial APIs and may require maintenance when their vendors change private endpoints. Ring Alarm panel control uses an MQTT bridge because the Python Ring integration does not expose general alarm-panel control.
 
 ## Floor plans
 
-The SVG floor-plan editor stores walls, doors, windows, sofas, tables, labels and linked devices in Django. Linked devices use the same generic control dialog as the dashboard. Devices that report coordinates, such as supported Roomba models, can override their static drawing position with the latest live position. Roomba scale/offset configuration maps robot coordinates to the floor-plan coordinate system.
+The SVG floor-plan editor is room-first: rooms have perimeter walls, can be dragged and resized by corner handles, and snap to neighbouring rooms, walls, grid positions and plan edges. Standalone walls have draggable endpoints. Doors/windows and other structural openings can snap to room boundaries. A searchable object library provides common structural, living-room, bedroom, kitchen, bathroom, office, utility, outdoor and decorative items.
+
+Linked devices use the same generic control dialog as the dashboard. Devices that report coordinates, such as supported Roomba models, can override their static drawing position with the latest live position. Roomba scale/offset configuration maps robot coordinates to the floor-plan coordinate system.
 
 ## API
 
@@ -133,6 +155,9 @@ The supported API namespace is `/api/v1/`. Important resources include:
 - `GET /api/v1/device-catalog/`
 - `POST /api/v1/discovery/`
 - `/api/v1/devices/`
+- `POST /api/v1/devices/complete-setup/`
+- `POST /api/v1/devices/setup-action/`
+- `POST /api/v1/devices/{id}/setup/`
 - `POST /api/v1/devices/{id}/control/`
 - `POST /api/v1/devices/{id}/refresh/`
 - `GET /api/v1/devices/{id}/camera-frame/`
@@ -156,6 +181,8 @@ CI runs Django checks, migration consistency, backend tests and critical Ruff ch
 ## Security model
 
 The current frontend deliberately has no login because it is intended for trusted household access. Do not expose HomeHub directly to the public Internet. Use a trusted LAN or VPN until household authentication and permissions are introduced.
+
+Device pairing tokens, Roomba credentials and integration-account credentials are encrypted at rest. Real environment files, runtime databases and token files are excluded from Git.
 
 See [SECURITY.md](SECURITY.md) for credential/runtime guidance.
 
