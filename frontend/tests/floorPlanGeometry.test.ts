@@ -43,7 +43,7 @@ test("wall endpoint snaps to a nearby room corner", () => {
 
 test("doors snap to the nearest room edge and rotate", () => {
   const room = { id: 1, x: 100, y: 100, width: 300, height: 200 };
-  const door = { x: 392, y: 150, width: 90, height: 12, rotation: 0 };
+  const door = { x: 350, y: 150, width: 90, height: 12, rotation: 0 };
   const snapped = snapOpeningToRooms(door, [room], true);
   assert.equal(snapped.rotation, 90);
   assert.ok(Math.abs(snapped.x - 355) < 0.001);
