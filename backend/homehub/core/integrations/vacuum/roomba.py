@@ -93,17 +93,21 @@ class RoombaDriver(BaseDriver):
         }
 
     def _client(self):
+        host = str(self.device.ip_address or "").strip()
+        blid = str(self.config.get("blid") or "").strip()
+        password = str(self.config.get("password") or "")
+        if not host:
+            raise IntegrationError("Roomba requires an IP address.")
+        if not blid or not password:
+            raise IntegrationError("Roomba requires both a BLID and local robot password.")
         try:
-            from roombapy.roomba import Roomba
-        except ImportError:
-            try:
-                from roombapy import Roomba
-            except ImportError as exc:
-                raise IntegrationError("roombapy is not installed") from exc
-        return Roomba(
-            address=self.device.ip_address,
-            blid=self.config.get("blid"),
-            password=self.config.get("password"),
+            from roombapy.roomba_factory import RoombaFactory
+        except ImportError as exc:
+            raise IntegrationError("roombapy is not installed") from exc
+        return RoombaFactory.create_roomba(
+            address=host,
+            blid=blid,
+            password=password,
             continuous=True,
         )
 
