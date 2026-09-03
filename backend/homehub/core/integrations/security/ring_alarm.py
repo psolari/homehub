@@ -1,5 +1,5 @@
 import json
-from homehub.core.integrations.base import BaseDriver, Control, IntegrationError
+from homehub.core.integrations.base import BaseDriver, Control
 from homehub.core.integrations.registry import register_driver
 from homehub.core.services.accounts import get_active_account, get_account_credentials
 
