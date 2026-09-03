@@ -11,20 +11,15 @@
       "name": "Launch Django Backend",
       "type": "debugpy",
       "request": "launch",
-      "program": "/Users/paolosolari/Library/Caches/pypoetry/virtualenvs/homehub-UCfKUx0I-py3.11/bin/homehub",
-      "args": [
-        "runserver",
-        "0.0.0.0:8000"
-      ],
+      "module": "homehub.manage",
+      "args": ["runserver", "0.0.0.0:8000"],
+      "cwd": "${workspaceFolder}/backend",
       "django": true,
       "justMyCode": false,
       "console": "integratedTerminal",
+      "envFile": "${workspaceFolder}/.env",
       "env": {
         "DJANGO_SETTINGS_MODULE": "homehub.smart_home_backend.settings"
-      },
-      "useShellExecute": false,
-      "consoleOptions": {
-        "name": "Backend"
       }
     },
     {
@@ -41,11 +36,7 @@
         "action": "openExternally"
       },
       "internalConsoleOptions": "neverOpen",
-      "restart": true,
-      "useShellExecute": false,
-      "consoleOptions": {
-        "name": "Frontend"
-      }
+      "restart": true
     }
   ]
 }
