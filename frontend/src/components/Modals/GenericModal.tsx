@@ -1,5 +1,3 @@
-import React from "react";
-
 interface GenericModalProps {
   children: React.ReactNode;
   isOpen: boolean;
@@ -23,7 +21,7 @@ const GenericModal: React.FC<GenericModalProps> = ({
       onClick={onClose}
     >
       <div
-        className={`bg-gradient-to-br from-zinc-800 to-zinc-900 border border-zinc-600 rounded-lg p-4 ${width ? width : "w-auto"} ${height ? height : "h-auto"} overflow-y-auto`}
+        className={`bg-gradient-to-br from-zinc-800 to-zinc-900 border border-zinc-600 rounded-lg p-4 ${width ? width : "w-auto"} ${height ? height : "h-auto"} overflow-y-auto transition-all duration-300 transform`}
         onClick={(e) => e.stopPropagation()}
       >
         {children}

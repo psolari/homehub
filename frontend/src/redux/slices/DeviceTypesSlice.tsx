@@ -12,13 +12,20 @@ export type DeviceTypeField = {
   hidden?: boolean;
 };
 
-export type DeviceType = {
+export type DeviceModel = {
   type: string;
   display_name: string;
   fields: DeviceTypeField[];
   description?: string;
   config_schema?: Record<string, unknown>;
   icon?: string;
+};
+
+export type DeviceType = {
+  generic: {
+    display_name: string;
+  }
+  [model: string]: DeviceModel | { display_name: string }; // allow extra keys
 };
 
 type DeviceTypesState = {
@@ -58,7 +65,7 @@ const deviceTypesSlice = createSlice({
       .addCase(fetchDeviceTypes.fulfilled, (state, action) => {
         state.loading = false;
         const types: DeviceType[] = action.payload;
-        state.entities = Object.fromEntries(types.map((t) => [t.type, t]));
+        state.entities = types;
       })
       .addCase(fetchDeviceTypes.rejected, (state, action) => {
         state.loading = false;

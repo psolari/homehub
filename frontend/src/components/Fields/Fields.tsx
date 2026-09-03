@@ -25,10 +25,10 @@ export const Fields = ({
     <div className="field-container text-gray-300">
       {type === "string" ? (
         <div className="flex justify-between h-9 items-center">
-          <label className="field-label">{label}</label>
+          <label className="w-1/3 field-label">{label}</label>
           <input
             type={type}
-            className="field-input bg-black text-white border border-gray-600 rounded px-2 py-1"
+            className="w-2/3 bg-stone-800 text-white rounded px-2 py-1 transition-all transform duration-300 border border-gray-500 hover:border-cyan-500"
             maxLength={max_length}
             value={input}
             onChange={(e) => onChange(e.target.value)} // use onChange
@@ -57,9 +57,9 @@ export const Fields = ({
         </div>
       ) : type === "choice" ? (
         <div className="flex justify-between h-9 items-center">
-          <label className="field-label">{label}</label>
+          <label className="field-label w-1/3">{label}</label>
           <select
-            className="bg-gray-800 rounded-md border border-gray-600 text-gray-300 px-2 py-1"
+            className="w-2/3 bg-stone-800 text-white rounded px-2 py-1 transition-all transform duration-300 border border-gray-500 hover:border-cyan-500"
             value={input}
             onChange={(e) => onChange(e.target.value)} // use onChange
           >

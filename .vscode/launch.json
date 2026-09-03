@@ -9,9 +9,9 @@
   "configurations": [
     {
       "name": "Launch Django Backend",
-      "type": "python",
+      "type": "debugpy",
       "request": "launch",
-      "program": "${workspaceFolder}/backend/manage.py",
+      "program": "/Users/paolosolari/Library/Caches/pypoetry/virtualenvs/homehub-UCfKUx0I-py3.11/bin/homehub",
       "args": [
         "runserver",
         "0.0.0.0:8000"
@@ -20,7 +20,7 @@
       "justMyCode": false,
       "console": "integratedTerminal",
       "env": {
-        "DJANGO_SETTINGS_MODULE": "smart_home_backend.settings"
+        "DJANGO_SETTINGS_MODULE": "homehub.smart_home_backend.settings"
       },
       "useShellExecute": false,
       "consoleOptions": {

@@ -3,33 +3,40 @@
   position: relative;
   appearance: none;
   -webkit-appearance: none;
-  width: 1rem;
-  height: 1rem;
-  border: 1px solid white;
+  width: 1.5rem;
+  height: 1.5rem;
+  border: 1px solid #6b7280;
   border-radius: 0.25rem;
-  background-color: transparent;
+  background-color: #292524;
   cursor: pointer;
+  transition: border 0.3s ease;
+
+}
+
+.custom-checkbox:hover {
+  border: 1px solid #06b6d4
 }
 
 .custom-checkbox:checked {
-  background-color: #7c35f6; /* blue-500 */
+  background-color: #292524; /* blue-500 */
 }
 
 .custom-checkbox:checked::after {
   content: "";
   position: absolute;
-  top: 0.15rem;
-  left: 0.3rem;
-  width: 0.25rem;
-  height: 0.5rem;
-  border: solid white;
+  top: 0.3rem;
+  left: 0.54rem;
+  width: 0.4rem;
+  height: 0.7rem;
+  border: solid #35c6f6;
   /* thinner tick */
-  border-width: 0 0.1rem 0.1rem 0;
+  border-width: 0 0.2rem 0.2rem 0;
+  border-radius: 0.1rem;
   transform: rotate(45deg);
 }
 
 .custom-checkbox:indeterminate {
-  background-color: #7c35f6;
+  background-color: #292524;
 }
 
 .custom-checkbox:indeterminate::after {

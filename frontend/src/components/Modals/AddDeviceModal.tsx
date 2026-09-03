@@ -3,6 +3,7 @@ import { useSelector } from "react-redux";
 import { useAppDispatch } from "../../utils/UseAppDispatch";
 import type { RootState } from "../../redux/store";
 import GenericModal from "./GenericModal";
+import GenericButton from "../Generic/GenericButton";
 import { devicesActions } from "../../redux/slices/DevicesSlice";
 import { Fields } from "../Fields/Fields";
 
@@ -41,19 +42,9 @@ const AddDeviceModal: React.FC<{
     : [];
 
   const [selectedType, setSelectedType] = useState<string>("");
-  const [formValues, setFormValues] = useState<Record<string, string>>({});
+  const [selectedModel, setSelectedModel] = useState<string>("");
 
-  useEffect(() => {
-    if (selectedType && deviceTypes[selectedType]) {
-      const init: Record<string, string> = {};
-      deviceTypes[selectedType].fields.forEach((f) => {
-        init[f.name] = "";
-      });
-      setFormValues(init);
-    } else {
-      setFormValues({});
-    }
-  }, [selectedType, deviceTypes]);
+  const [formValues, setFormValues] = useState<Record<string, string>>({});
 
   const handleChange = (name: string, value: string) => {
     setFormValues((prev) => ({ ...prev, [name]: value }));
@@ -61,13 +52,13 @@ const AddDeviceModal: React.FC<{
 
   const handleClose = useCallback(() => {
     setSelectedType("");
+    setSelectedModel("")
     setFormValues({});
     onClose();
   }, [onClose]);
 
   // new: close on ESC
   useEffect(() => {
-    console.log("AddDeviceModal useEffect for ESC key");
     if (!isOpen) return;
     const onKeyDown = (e: KeyboardEvent) => {
       if (e.key === "Escape") {
@@ -85,7 +76,7 @@ const AddDeviceModal: React.FC<{
     try {
       // split formValues into root vs. config based on device-specific field names
       const configFieldNames = new Set(
-        deviceTypes[selectedType].fields.map((f) => f.name),
+        deviceTypes[selectedType][selectedModel].fields.map((f) => f.name),
       );
       const rootValues: Record<string, string> = {};
       const configValues: Record<string, string> = {};
@@ -100,6 +91,7 @@ const AddDeviceModal: React.FC<{
       await dispatch(
         devicesActions.createOne({
           device_type: selectedType,
+          model: selectedModel,
           ...rootValues,
           config: configValues,
         }),
@@ -113,26 +105,42 @@ const AddDeviceModal: React.FC<{
   return (
     <GenericModal isOpen={isOpen} onClose={handleClose} width={"w-1/3"}>
       <div className="p-4">
-        <h2 className="text-lg text-white font-bold mb-4">Add Device</h2>
-        <div className="mb-4">
+        <h2 className="text-lg text-white font-bold mb-4 border-b border-cyan-500 w-fit">Add Device</h2>
+        <div className="mb-2">
           <Fields
             type="choice"
             label="Device Type"
             help_text="Select the type of device you want to add."
             input={selectedType}
-            onChange={(value) => setSelectedType(value)}
+            onChange={(value) => (setSelectedModel(""), setSelectedType(value))}
             choices={Object.keys(deviceTypes).map((type) => ({
-              value: type,
-              display_name: deviceTypes[type].display_name,
-            }))}
-          />
+                value: type,
+                display_name: deviceTypes[type].generic.display_name,
+              }))}
+                    />
         </div>
         {/* Generic POST fields */}{" "}
         {selectedType && deviceTypes[selectedType] && (
           <>
-            <div className="mb-4">
+                  <div className="mb-2">
+          <Fields
+            type="choice"
+            label="Device Model"
+            help_text="Select the Model of device you want to add."
+            input={selectedModel}
+            onChange={(value) => setSelectedModel(value)}
+            choices={Object.keys(deviceTypes[selectedType]).filter((type) => type !== "generic").map((type) => ({
+                value: type,
+                display_name: deviceTypes[selectedType][type].display_name,
+              }))}
+                    />
+        </div>
+        {selectedModel && (
+          <>
+
+            <div className="">
               {postFields
-                .filter(([, field]) => !field.hidden)
+                .filter(([key, field]) => key !== "generic" && !field.hidden)
                 .map(([key, field]) => (
                   <div key={key} className="mb-2">
                     <Fields
@@ -148,14 +156,14 @@ const AddDeviceModal: React.FC<{
             </div>
 
             {/* Device-specific fields */}
-            <div className="mb-4">
-              {deviceTypes[selectedType].fields
+            <div className="">
+              {deviceTypes[selectedType][selectedModel].fields
                 .filter((field) => !field.hidden)
                 .map((field) => (
                   <div key={field.name} className="mb-2">
                     <Fields
                       type={field.type}
-                      label={field.name}
+                      // label={field.display_name}
                       input={formValues[field.name] || ""}
                       onChange={(value) => handleChange(field.name, value)} // added
                     />
@@ -163,14 +171,22 @@ const AddDeviceModal: React.FC<{
                 ))}
             </div>
           </>
+              )}</>
         )}
-        <button
-          className="bg-blue-500 text-white px-4 py-2 rounded"
-          onClick={handleAddDevice}
-          disabled={!selectedType}
-        >
-          Add Device
-        </button>
+        <div className="flex justify-end">
+          <GenericButton
+            text="Add Device"
+            type="save"
+            handleSubmit={handleAddDevice}
+            disabled={false}
+          />
+                  <GenericButton
+            text="Cancel"
+            type="cancel"
+            handleSubmit={handleClose}
+            disabled={false}
+          />
+        </div>
       </div>
     </GenericModal>
   );
