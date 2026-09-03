@@ -125,7 +125,7 @@ Manual onboarding uses the same wizard. Choose a generic category or known drive
 
 ### Repairing an existing device
 
-Devices already present in an error state display **Finish setup**. This reopens the same driver wizard with existing non-secret configuration prefilled. HomeHub exposes only the names of already-stored secret fields, so the wizard can preserve an encrypted token/password without revealing it to the browser.
+Devices already present in an error state display **Finish setup**. This reopens the same driver wizard with existing non-secret configuration prefilled. HomeHub exposes only the names of already-stored secret fields, so the wizard can preserve an encrypted token/password without revealing it to the browser. Healthy configured devices expose **Reconfigure** so network details, linked accounts and advanced settings can be updated later through the same workflow.
 
 ### Examples
 
