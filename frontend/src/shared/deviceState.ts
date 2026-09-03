@@ -1,0 +1,4 @@
+import type{ControlDescriptor,Device}from"./types";
+export function deviceIsActive(device:Device){const status=String(device.state?.status||device.status||"").toLowerCase();const power=device.state?.power;return status==="on"||status==="running"||power===true||power==="on"}
+export function statusTone(device:Device):"active"|"inactive"|"error"|"unknown"{const status=String(device.state?.status||device.status||"unknown").toLowerCase();if(status==="error")return"error";if(deviceIsActive(device))return"active";if(status==="off"||status==="idle")return"inactive";return"unknown"}
+export function visibleControls(device:Device):ControlDescriptor[]{const all=device.capabilities?.controls||[];const selected=device.dashboard_card?.visible_controls||[];return selected.length?all.filter(c=>selected.includes(c.action)):all.slice(0,4)}

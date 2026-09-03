@@ -2,15 +2,6 @@
 @tailwind components;
 @tailwind utilities;
 
-body {
-  @apply font-body;
-}
-
-h1,
-h2,
-h3,
-h4,
-h5,
-h6 {
-  @apply font-futuristic;
-}
+body { @apply bg-zinc-950 font-body text-white; }
+h1,h2,h3,h4,h5,h6 { @apply font-futuristic; }
+button,select,input { @apply outline-none; }

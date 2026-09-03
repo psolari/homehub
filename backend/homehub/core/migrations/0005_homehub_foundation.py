@@ -1,0 +1,28 @@
+from django.db import migrations, models
+import django.db.models.deletion
+
+
+class Migration(migrations.Migration):
+    dependencies = [("core", "0004_device_model")]
+    operations = [
+        migrations.AddField(model_name="floorplan", name="height", field=models.PositiveIntegerField(default=800)),
+        migrations.AddField(model_name="floorplan", name="width", field=models.PositiveIntegerField(default=1200)),
+        migrations.AlterField(model_name="floorplan", name="svg_data", field=models.TextField(blank=True, default="")),
+        migrations.AlterField(model_name="device", name="device_type", field=models.CharField(choices=[("light","Light"),("switch","Switch"),("sensor","Sensor"),("thermostat","Thermostat"),("camera","Camera"),("tv","TV"),("speaker","Speaker"),("vacuum","Vacuum"),("security","Security"),("appliance","Appliance")], max_length=20)),
+        migrations.AlterField(model_name="device", name="status", field=models.CharField(choices=[("off","Off"),("on","On"),("idle","Idle"),("error","Error"),("running","Running"),("unknown","Unknown")], default="unknown", max_length=10)),
+        migrations.AddField(model_name="device", name="encrypted_credentials", field=models.TextField(blank=True, default="")),
+        migrations.AddField(model_name="device", name="capabilities", field=models.JSONField(blank=True, default=dict)),
+        migrations.AddField(model_name="device", name="discovery_data", field=models.JSONField(blank=True, default=dict)),
+        migrations.AddField(model_name="device", name="hardware_model", field=models.CharField(blank=True, default="", max_length=150)),
+        migrations.AddField(model_name="device", name="is_online", field=models.BooleanField(default=False)),
+        migrations.AddField(model_name="device", name="last_seen", field=models.DateTimeField(blank=True, null=True)),
+        migrations.AddField(model_name="device", name="manufacturer", field=models.CharField(blank=True, default="", max_length=100)),
+        migrations.AddField(model_name="device", name="source", field=models.CharField(choices=[("manual","Manual"),("discovery","Discovery"),("cloud","Cloud")], default="manual", max_length=20)),
+        migrations.AddField(model_name="device", name="state", field=models.JSONField(blank=True, default=dict)),
+        migrations.AddField(model_name="device", name="unique_id", field=models.CharField(blank=True, max_length=255, null=True, unique=True)),
+        migrations.CreateModel(name="IntegrationAccount", fields=[("id",models.BigAutoField(auto_created=True,primary_key=True,serialize=False,verbose_name="ID")),("provider",models.CharField(choices=[("spotify","Spotify"),("hive","Hive"),("ring","Ring"),("alexa","Amazon Alexa"),("ring_alarm_mqtt","Ring Alarm MQTT")],max_length=30)),("name",models.CharField(max_length=100)),("encrypted_credentials",models.TextField(blank=True,default="")),("config",models.JSONField(blank=True,default=dict)),("metadata",models.JSONField(blank=True,default=dict)),("status",models.CharField(choices=[("disconnected","Disconnected"),("connected","Connected"),("needs_auth","Needs authentication"),("error","Error")],default="disconnected",max_length=20)),("error",models.TextField(blank=True,default="")),("active",models.BooleanField(default=True))], options={"ordering":["provider","name"]}),
+        migrations.AddConstraint(model_name="integrationaccount", constraint=models.UniqueConstraint(fields=("provider","name"),name="unique_homehub_integration_account")),
+        migrations.CreateModel(name="DashboardCard", fields=[("id",models.BigAutoField(auto_created=True,primary_key=True,serialize=False,verbose_name="ID")),("enabled",models.BooleanField(default=True)),("size",models.CharField(choices=[("small","Small"),("medium","Medium"),("large","Large")],default="medium",max_length=10)),("order",models.PositiveIntegerField(default=0)),("visible_controls",models.JSONField(blank=True,default=list)),("device",models.OneToOneField(on_delete=django.db.models.deletion.CASCADE,related_name="dashboard_card",to="core.device"))], options={"ordering":["order","id"]}),
+        migrations.CreateModel(name="FloorPlanObject", fields=[("id",models.BigAutoField(auto_created=True,primary_key=True,serialize=False,verbose_name="ID")),("object_type",models.CharField(choices=[("wall","Wall"),("door","Door"),("window","Window"),("sofa","Sofa"),("table","Table"),("device","Device"),("label","Label")],max_length=20)),("x",models.FloatField(default=0)),("y",models.FloatField(default=0)),("width",models.FloatField(default=100)),("height",models.FloatField(default=50)),("rotation",models.FloatField(default=0)),("z_index",models.IntegerField(default=0)),("properties",models.JSONField(blank=True,default=dict)),("device",models.ForeignKey(blank=True,null=True,on_delete=django.db.models.deletion.SET_NULL,related_name="floorplan_objects",to="core.device")),("floor_plan",models.ForeignKey(on_delete=django.db.models.deletion.CASCADE,related_name="objects",to="core.floorplan"))], options={"ordering":["z_index","id"]}),
+        migrations.CreateModel(name="DeviceLocation", fields=[("id",models.BigAutoField(auto_created=True,primary_key=True,serialize=False,verbose_name="ID")),("x",models.FloatField()),("y",models.FloatField()),("heading",models.FloatField(default=0)),("source",models.CharField(default="device",max_length=40)),("recorded_at",models.DateTimeField(auto_now_add=True)),("device",models.ForeignKey(on_delete=django.db.models.deletion.CASCADE,related_name="location_history",to="core.device")),("floor_plan",models.ForeignKey(blank=True,null=True,on_delete=django.db.models.deletion.SET_NULL,related_name="device_locations",to="core.floorplan"))], options={"ordering":["-recorded_at"]}),
+    ]
