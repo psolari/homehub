@@ -12,6 +12,7 @@ from homehub.core.models import (
 )
 from homehub.core.services.accounts import get_credentials, set_credentials
 from homehub.core.services.device_config import (
+    get_device_credentials,
     sanitized_config,
     set_device_credentials,
     split_driver_config,
@@ -73,6 +74,7 @@ class DeviceLocationSerializer(serializers.ModelSerializer):
 class DeviceSerializer(serializers.ModelSerializer):
     dashboard_card = DashboardCardSerializer(read_only=True)
     latest_location = serializers.SerializerMethodField()
+    configured_credentials = serializers.SerializerMethodField()
 
     class Meta:
         model = Device
@@ -100,12 +102,26 @@ class DeviceSerializer(serializers.ModelSerializer):
             "last_seen",
             "dashboard_card",
             "latest_location",
+            "configured_credentials",
         ]
-        read_only_fields = ["status", "capabilities", "state", "is_online", "last_seen"]
+        read_only_fields = [
+            "status",
+            "capabilities",
+            "state",
+            "is_online",
+            "last_seen",
+            "configured_credentials",
+        ]
 
     def get_latest_location(self, obj):
         location = obj.location_history.first()
         return DeviceLocationSerializer(location).data if location else None
+
+    def get_configured_credentials(self, obj):
+        try:
+            return sorted(get_device_credentials(obj).keys()) if obj.encrypted_credentials else []
+        except Exception:
+            return []
 
     def to_representation(self, instance):
         data = super().to_representation(instance)
