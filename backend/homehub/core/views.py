@@ -9,6 +9,7 @@ from rest_framework.views import APIView
 from homehub.core.integrations import get_driver_catalog
 from homehub.core.integrations.music.spotify import SpotifyService
 from homehub.core.integrations.providers import PROVIDER_SCHEMAS
+from homehub.core.integrations.registry import get_driver
 from homehub.core.models import (
     DashboardCard,
     Device,
@@ -28,12 +29,15 @@ from homehub.core.serializers import (
     RoomSerializer,
     UserSerializer,
 )
+from homehub.core.services.device_config import get_device_credentials
 from homehub.core.services.devices import (
     create_device,
     driver_for,
     execute_control,
+    initialize_device,
     refresh_device,
     run_async,
+    validate_setup_payload,
 )
 from homehub.core.services.discovery import discover_all
 
@@ -84,20 +88,108 @@ class DeviceViewSet(OpenViewSet):
     def create(self, request, *args, **kwargs):
         serializer = self.get_serializer(data=request.data)
         serializer.is_valid(raise_exception=True)
-        device = create_device(
-            dict(serializer.validated_data),
-            validate_connection=bool(request.data.get("validate_connection", True)),
-        )
+        try:
+            device = create_device(
+                dict(serializer.validated_data),
+                validate_connection=bool(request.data.get("validate_connection", True)),
+            )
+        except Exception as exc:
+            return Response({"error": str(exc)}, status=status.HTTP_400_BAD_REQUEST)
         return Response(self.get_serializer(device).data, status=status.HTTP_201_CREATED)
+
+    @action(detail=False, methods=["post"], url_path="complete-setup")
+    def complete_setup(self, request):
+        """Validate, pair/authenticate and create a device as one transaction."""
+        serializer = self.get_serializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        try:
+            device = create_device(
+                dict(serializer.validated_data),
+                validate_connection=bool(request.data.get("validate_connection", True)),
+                require_success=True,
+            )
+        except Exception as exc:
+            return Response({"error": str(exc)}, status=status.HTTP_400_BAD_REQUEST)
+        return Response(
+            {"device": self.get_serializer(device).data, "state": device.state},
+            status=status.HTTP_201_CREATED,
+        )
+
+    @action(detail=False, methods=["post"], url_path="setup-action")
+    def setup_action(self, request):
+        """Run a safe driver-specific onboarding helper before device creation."""
+        device_type = str(request.data.get("device_type") or "")
+        model = str(request.data.get("model") or "")
+        action_name = str(request.data.get("action") or "")
+        if not device_type or not model or not action_name:
+            return Response(
+                {"error": "device_type, model and action are required"},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        try:
+            driver_class = get_driver(device_type, model)
+            result = run_async(
+                driver_class.run_setup_action(
+                    action_name,
+                    device_data=dict(request.data.get("device") or {}),
+                    config=dict(request.data.get("config") or {}),
+                    parameters=dict(request.data.get("parameters") or {}),
+                )
+            )
+            return Response(result)
+        except Exception as exc:
+            return Response({"error": str(exc)}, status=status.HTTP_400_BAD_REQUEST)
 
     @action(detail=False, methods=["post"], url_path="add-discovered")
     def add_discovered(self, request):
+        # Retained for API compatibility. The React UI now uses complete-setup
+        # so discovered devices cannot bypass their integration wizard.
         payload = dict(request.data)
         payload.setdefault("source", "discovery")
         serializer = self.get_serializer(data=payload)
         serializer.is_valid(raise_exception=True)
-        device = create_device(dict(serializer.validated_data), validate_connection=True)
+        try:
+            device = create_device(
+                dict(serializer.validated_data),
+                validate_connection=True,
+                require_success=True,
+            )
+        except Exception as exc:
+            return Response({"error": str(exc)}, status=status.HTTP_400_BAD_REQUEST)
         return Response(self.get_serializer(device).data, status=status.HTTP_201_CREATED)
+
+    @action(detail=True, methods=["post"], url_path="setup")
+    def setup_existing(self, request, pk=None):
+        """Finish/retry onboarding for a device that already exists."""
+        device = self.get_object()
+        incoming = dict(request.data)
+        incoming_config = dict(incoming.pop("config", {}) or {})
+        merged_public_config = {**(device.config or {}), **incoming_config}
+        incoming["config"] = merged_public_config
+
+        serializer = self.get_serializer(device, data=incoming, partial=True)
+        serializer.is_valid(raise_exception=True)
+        try:
+            device = serializer.save()
+            full_config = {**(device.config or {})}
+            if device.encrypted_credentials:
+                full_config.update(get_device_credentials(device))
+            validate_setup_payload(
+                {
+                    "device_type": device.device_type,
+                    "model": device.model,
+                    "ip_address": device.ip_address,
+                    "mac_address": device.mac_address,
+                    "config": full_config,
+                }
+            )
+            state_data = initialize_device(device, raise_errors=True)
+        except Exception as exc:
+            return Response(
+                {"error": str(exc), "device": self.get_serializer(device).data},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        return Response({"device": self.get_serializer(device).data, "state": state_data})
 
     @action(detail=True, methods=["post", "get"])
     def refresh(self, request, pk=None):
@@ -128,7 +220,9 @@ class DeviceViewSet(OpenViewSet):
         except Exception as exc:
             return Response({"error": str(exc)}, status=status.HTTP_502_BAD_GATEWAY)
         if not frame:
-            return Response({"error": "No camera frame is available"}, status=status.HTTP_404_NOT_FOUND)
+            return Response(
+                {"error": "No camera frame is available"}, status=status.HTTP_404_NOT_FOUND
+            )
         data, content_type = frame
         response = HttpResponse(data, content_type=content_type)
         response["Cache-Control"] = "no-store"
