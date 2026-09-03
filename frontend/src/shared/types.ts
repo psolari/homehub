@@ -44,6 +44,7 @@ export type Device = {
   last_seen?: string | null;
   dashboard_card?: DashboardCard | null;
   latest_location?: { x: number; y: number; heading: number; recorded_at: string } | null;
+  configured_credentials?: string[];
 };
 
 export type DriverField = {
