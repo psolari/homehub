@@ -11,21 +11,57 @@ class AlexaDriver(BaseDriver):
     display_name = "Amazon Alexa / Echo"
     manufacturer = "Amazon"
     config_schema = [
-        {"name":"account_id","label":"Alexa account ID","type":"number","required":True},
-        {"name":"serial_number","label":"Alexa device serial","type":"string","required":True},
-        {"name":"spotify_account_id","label":"Spotify account ID","type":"number","required":False},
-        {"name":"spotify_device_id","label":"Spotify Connect device ID","type":"string","required":False},
-        {"name":"spotify_device_name","label":"Spotify Connect device name","type":"string","required":False},
+        {
+            "name": "account_id",
+            "label": "Alexa account",
+            "type": "number",
+            "required": True,
+            "description": "The HomeHub Alexa integration account that owns this Echo device.",
+        },
+        {
+            "name": "serial_number",
+            "label": "Alexa device serial",
+            "type": "string",
+            "required": True,
+            "description": "Usually filled automatically when the device is discovered from your Alexa account.",
+        },
+        {"name": "spotify_account_id", "label": "Spotify account", "type": "number", "required": False},
+        {"name": "spotify_device_id", "label": "Spotify Connect device ID", "type": "string", "required": False},
+        {"name": "spotify_device_name", "label": "Spotify Connect device name", "type": "string", "required": False},
     ]
+    setup_schema = {
+        "description": "Link this Echo to a configured Amazon Alexa account, then verify that HomeHub can see the device.",
+        "requires_ip": False,
+        "instructions": [
+            "Alexa devices are controlled through the configured Amazon account rather than directly by IP address.",
+            "Choose an Alexa integration account. If you do not have one yet, configure it in this wizard using your Amazon account details.",
+            "For discovered Echo devices the serial number is filled automatically. For manual setup, enter the serial shown by Alexa discovery/account data.",
+            "The Alexa integration uses an unofficial web API and Amazon may occasionally require re-authentication.",
+        ],
+        "account_provider": "alexa",
+        "account_field": "account_id",
+        "optional_accounts": [
+            {
+                "provider": "spotify",
+                "field": "spotify_account_id",
+                "label": "Spotify account",
+                "description": "Optional — enables Spotify search and playback controls.",
+            }
+        ],
+        "test_connection": True,
+        "advanced_fields": ["spotify_device_id", "spotify_device_name"],
+    }
     controls = [
-        Control("play","Play",group="playback"), Control("pause","Pause",group="playback"),
-        Control("next","Next",group="playback"), Control("previous","Previous",group="playback"),
-        Control("volume","Volume",type="range",group="audio",parameter="value",minimum=0,maximum=100,step=1),
-        Control("announcement","Announcement",type="text",group="voice",parameter="text"),
-        Control("tts","Speak",type="text",group="voice",parameter="text"),
-        Control("custom","Alexa command",type="text",group="voice",parameter="text"),
-        Control("spotify_play","Play from Spotify",type="media_search",group="spotify",parameter="query"),
-        Control("spotify_volume","Spotify volume",type="range",group="spotify",parameter="value",minimum=0,maximum=100,step=1),
+        Control("play", "Play", group="playback"),
+        Control("pause", "Pause", group="playback"),
+        Control("next", "Next", group="playback"),
+        Control("previous", "Previous", group="playback"),
+        Control("volume", "Volume", type="range", group="audio", parameter="value", minimum=0, maximum=100, step=1),
+        Control("announcement", "Announcement", type="text", group="voice", parameter="text"),
+        Control("tts", "Speak", type="text", group="voice", parameter="text"),
+        Control("custom", "Alexa command", type="text", group="voice", parameter="text"),
+        Control("spotify_play", "Play from Spotify", type="media_search", group="spotify", parameter="query"),
+        Control("spotify_volume", "Spotify volume", type="range", group="spotify", parameter="value", minimum=0, maximum=100, step=1),
     ]
 
     async def _api(self):
@@ -44,7 +80,11 @@ class AlexaDriver(BaseDriver):
         devices = await AlexaAPI.get_devices(login)
         serial = self.config.get("serial_number")
         device = next(
-            (item for item in devices if item.get("serialNumber") == serial or item.get("serial_number") == serial),
+            (
+                item
+                for item in devices
+                if item.get("serialNumber") == serial or item.get("serial_number") == serial
+            ),
             None,
         )
         if not device:
@@ -70,17 +110,34 @@ class AlexaDriver(BaseDriver):
         result = function(*args)
         return await result if hasattr(result, "__await__") else result
 
-    async def action_play(self): return await self._call("play")
-    async def action_pause(self): return await self._call("pause")
-    async def action_next(self): return await self._call("next")
-    async def action_previous(self): return await self._call("previous")
-    async def action_volume(self, value): return await self._call("set_volume", max(0, min(100, int(value))) / 100)
-    async def action_announcement(self, text): return await self._call("send_announcement", text)
-    async def action_tts(self, text): return await self._call("send_tts", text)
-    async def action_custom(self, text): return await self._call("run_custom", text)
+    async def action_play(self):
+        return await self._call("play")
+
+    async def action_pause(self):
+        return await self._call("pause")
+
+    async def action_next(self):
+        return await self._call("next")
+
+    async def action_previous(self):
+        return await self._call("previous")
+
+    async def action_volume(self, value):
+        return await self._call("set_volume", max(0, min(100, int(value))) / 100)
+
+    async def action_announcement(self, text):
+        return await self._call("send_announcement", text)
+
+    async def action_tts(self, text):
+        return await self._call("send_tts", text)
+
+    async def action_custom(self, text):
+        return await self._call("run_custom", text)
 
     def _spotify(self):
-        return SpotifyService(get_active_account("spotify", account_id=self.config.get("spotify_account_id")))
+        return SpotifyService(
+            get_active_account("spotify", account_id=self.config.get("spotify_account_id"))
+        )
 
     async def action_spotify_play(self, query):
         return await self.to_thread(
