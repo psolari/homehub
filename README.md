@@ -83,15 +83,7 @@ npm ci
 cd ..
 ```
 
-Load the root environment file before running Django from a normal terminal:
-
-```bash
-set -a
-source .env
-set +a
-```
-
-The checked-in VS Code launch configuration loads the root `.env` automatically.
+HomeHub automatically loads the repository-root `.env` when Django starts. Real process/container environment variables take precedence, so you do not need to run `source .env` in each terminal.
 
 Backend:
 
