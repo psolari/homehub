@@ -1,5 +1,5 @@
 aiowebostv>=0.10,<1
-samsungtvws>=3.0.5,<4
+samsungtvws>=2.7.2,<3
 roombapy>=1.9.2,<2
 soco>=0.31.2,<1
 PyChromecast>=14.0.10,<15

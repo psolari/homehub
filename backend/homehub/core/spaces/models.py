@@ -22,8 +22,20 @@ class Room(models.Model):
 
 
 class FloorPlanObject(models.Model):
-    OBJECT_TYPES = [("wall","Wall"),("door","Door"),("window","Window"),("sofa","Sofa"),("table","Table"),("device","Device"),("label","Label")]
-    floor_plan = models.ForeignKey(FloorPlan, related_name="objects", on_delete=models.CASCADE)
+    OBJECT_TYPES = [
+        ("wall", "Wall"),
+        ("door", "Door"),
+        ("window", "Window"),
+        ("sofa", "Sofa"),
+        ("table", "Table"),
+        ("device", "Device"),
+        ("label", "Label"),
+    ]
+    floor_plan = models.ForeignKey(
+        FloorPlan,
+        related_name="floorplan_objects",
+        on_delete=models.CASCADE,
+    )
     object_type = models.CharField(max_length=20, choices=OBJECT_TYPES)
     x = models.FloatField(default=0)
     y = models.FloatField(default=0)
@@ -32,7 +44,13 @@ class FloorPlanObject(models.Model):
     rotation = models.FloatField(default=0)
     z_index = models.IntegerField(default=0)
     properties = models.JSONField(default=dict, blank=True)
-    device = models.ForeignKey("core.Device", related_name="floorplan_objects", on_delete=models.SET_NULL, null=True, blank=True)
+    device = models.ForeignKey(
+        "core.Device",
+        related_name="floorplan_objects",
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+    )
 
     class Meta:
         ordering = ["z_index", "id"]
