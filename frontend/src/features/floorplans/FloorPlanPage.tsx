@@ -4,29 +4,35 @@ import { get, patch, post, remove } from "../../shared/api/client";
 import type { Device, FloorPlan, FloorPlanObject, FloorPlanObjectType, Room } from "../../shared/types";
 import { deviceIsActive, statusTone } from "../../shared/deviceState";
 import DeviceModal from "../../shared/components/DeviceModal";
-import { floorPlanPalette, paletteCategories } from "./floorPlanCatalog";
+import { floorPlanPalette, paletteCategories, roomPresets } from "./floorPlanCatalog";
+import type { PaletteItem, RoomPreset } from "./floorPlanCatalog";
 import {
   clamp,
   collectSnapPoints,
   GRID_SIZE,
   MIN_OBJECT_SIZE,
   resizeRect,
+  snapOpeningToRooms,
   snapPoint,
   snapRoomPosition,
   wallEndPoint,
   wallFromEndpoints,
 } from "./floorPlanGeometry";
+import type { SnapGuide } from "./floorPlanGeometry";
 
 type Selection = { kind: "room" | "object"; id: number } | null;
 type ResizeHandle = "nw" | "ne" | "se" | "sw";
 type Interaction =
-  | { kind: "move-room"; id: number; start: { x: number; y: number }; origin: Room }
+  | { kind: "move-room"; id: number; start: Point; origin: Room }
   | { kind: "resize-room"; id: number; handle: ResizeHandle; origin: Room }
-  | { kind: "move-object"; id: number; start: { x: number; y: number }; origin: FloorPlanObject }
+  | { kind: "move-object"; id: number; start: Point; origin: FloorPlanObject }
   | { kind: "resize-object"; id: number; handle: ResizeHandle; origin: FloorPlanObject }
   | { kind: "wall-end"; id: number; end: "start" | "end"; origin: FloorPlanObject };
 
+type Point = { x: number; y: number };
+
 const OPENING_TYPES = new Set<FloorPlanObjectType>(["door", "window", "radiator", "fireplace"]);
+const NON_RESIZABLE = new Set<FloorPlanObjectType>(["column", "plant", "lamp", "device"]);
 
 export default function FloorPlanPage() {
   const [plans, setPlans] = useState<FloorPlan[]>([]);
@@ -37,11 +43,17 @@ export default function FloorPlanPage() {
   const [newDeviceId, setNewDeviceId] = useState("");
   const [error, setError] = useState("");
   const [paletteSearch, setPaletteSearch] = useState("");
-  const [paletteCategory, setPaletteCategory] = useState<(typeof paletteCategories)[number] | "All">("All");
+  const [paletteCategory, setPaletteCategory] = useState<"All" | (typeof paletteCategories)[number]>("All");
   const [snapEnabled, setSnapEnabled] = useState(true);
   const [gridVisible, setGridVisible] = useState(true);
   const [zoom, setZoom] = useState(1);
+  const [guides, setGuides] = useState<SnapGuide[]>([]);
+  const [libraryTab, setLibraryTab] = useState<"rooms" | "objects" | "devices">("rooms");
   const interaction = useRef<Interaction | null>(null);
+  const planRef = useRef<FloorPlan | null>(null);
+
+  const plan = plans.find((item) => item.id === planId) || null;
+  planRef.current = plan;
 
   useEffect(() => {
     const load = async () => {
@@ -57,14 +69,13 @@ export default function FloorPlanPage() {
           }),
         ];
       }
-      const nextDevices = await get<Device[]>("/devices/");
       setPlans(nextPlans);
-      setDevices(nextDevices);
+      setDevices(await get<Device[]>("/devices/"));
       setPlanId((current) =>
-        current && nextPlans.some((plan) => plan.id === current) ? current : nextPlans[0].id,
+        current && nextPlans.some((item) => item.id === current) ? current : nextPlans[0].id,
       );
     };
-    load().catch((reason: Error) => setError(reason.message));
+    void load().catch((reason: Error) => setError(reason.message));
   }, []);
 
   useEffect(() => {
@@ -82,38 +93,22 @@ export default function FloorPlanPage() {
         );
         setDevices(refreshed);
       } catch {
-        // Keep the last-known floor-plan state while a device or backend is unavailable.
+        // Preserve last-known state if one or more integrations are temporarily offline.
       }
     };
     const timer = window.setInterval(refresh, 3500);
     return () => window.clearInterval(timer);
   }, []);
 
-  useEffect(() => {
-    const onKeyDown = (event: KeyboardEvent) => {
-      if (!selection || event.target instanceof HTMLInputElement || event.target instanceof HTMLTextAreaElement) return;
-      if (event.key === "Escape") setSelection(null);
-      if ((event.key === "Delete" || event.key === "Backspace") && selection) {
-        event.preventDefault();
-        void deleteSelection(selection);
-      }
-    };
-    window.addEventListener("keydown", onKeyDown);
-    return () => window.removeEventListener("keydown", onKeyDown);
-  });
-
-  const plan = plans.find((item) => item.id === planId) || null;
-  const selectedRoom =
-    selection?.kind === "room" ? plan?.rooms.find((item) => item.id === selection.id) || null : null;
-  const selectedObject =
-    selection?.kind === "object" ? plan?.objects.find((item) => item.id === selection.id) || null : null;
+  const selectedRoom = selection?.kind === "room" ? plan?.rooms.find((room) => room.id === selection.id) || null : null;
+  const selectedObject = selection?.kind === "object" ? plan?.objects.find((object) => object.id === selection.id) || null : null;
   const deviceById = useMemo(() => new Map(devices.map((device) => [device.id, device])), [devices]);
   const filteredPalette = useMemo(() => {
     const term = paletteSearch.trim().toLowerCase();
     return floorPlanPalette.filter(
       (item) =>
         (paletteCategory === "All" || item.category === paletteCategory) &&
-        (!term || item.label.toLowerCase().includes(term)),
+        (!term || item.label.toLowerCase().includes(term) || item.category.toLowerCase().includes(term)),
     );
   }, [paletteCategory, paletteSearch]);
 
@@ -130,47 +125,36 @@ export default function FloorPlanPage() {
     setPlans((items) =>
       items.map((item) =>
         item.id === planId
-          ? {
-              ...item,
-              objects: item.objects.map((object) => (object.id === id ? { ...object, ...changes } : object)),
-            }
+          ? { ...item, objects: item.objects.map((object) => (object.id === id ? { ...object, ...changes } : object)) }
           : item,
       ),
     );
 
   const saveRoom = async (room: Room) => {
-    try {
-      await patch(`/rooms/${room.id}/`, {
-        name: room.name,
-        description: room.description || "",
-        x: room.x,
-        y: room.y,
-        width: room.width,
-        height: room.height,
-        rotation: room.rotation,
-        z_index: room.z_index,
-        properties: room.properties,
-      });
-    } catch (reason) {
-      setError(reason instanceof Error ? reason.message : "Could not save room");
-    }
+    await patch(`/rooms/${room.id}/`, {
+      name: room.name,
+      description: room.description || "",
+      x: room.x,
+      y: room.y,
+      width: room.width,
+      height: room.height,
+      rotation: room.rotation,
+      z_index: room.z_index,
+      properties: room.properties,
+    });
   };
 
   const saveObject = async (object: FloorPlanObject) => {
-    try {
-      await patch(`/floor-plan-objects/${object.id}/`, {
-        x: object.x,
-        y: object.y,
-        width: object.width,
-        height: object.height,
-        rotation: object.rotation,
-        z_index: object.z_index,
-        properties: object.properties,
-        device: object.device,
-      });
-    } catch (reason) {
-      setError(reason instanceof Error ? reason.message : "Could not save floor-plan object");
-    }
+    await patch(`/floor-plan-objects/${object.id}/`, {
+      x: object.x,
+      y: object.y,
+      width: object.width,
+      height: object.height,
+      rotation: object.rotation,
+      z_index: object.z_index,
+      properties: object.properties,
+      device: object.device || null,
+    });
   };
 
   const createPlan = async () => {
@@ -188,71 +172,59 @@ export default function FloorPlanPage() {
     setSelection(null);
   };
 
-  const addRoom = async () => {
+  const addRoom = async (preset: RoomPreset) => {
     if (!plan) return;
-    const index = plan.rooms.length + 1;
-    const offset = ((index - 1) % 5) * 30;
+    const sameType = plan.rooms.filter((room) => room.properties?.room_type === preset.properties.room_type).length;
+    const suffix = sameType ? ` ${sameType + 1}` : "";
     const room = await post<Room>("/rooms/", {
       floor_plan: plan.id,
-      name: `Room ${index}`,
+      name: `${preset.label}${suffix}`,
       description: "",
-      x: 50 + offset,
-      y: 50 + offset,
-      width: 320,
-      height: 240,
+      x: 40 + ((plan.rooms.length * 30) % 180),
+      y: 40 + ((plan.rooms.length * 30) % 140),
+      width: preset.width,
+      height: preset.height,
       rotation: 0,
       z_index: -100,
-      properties: { wall_thickness: 12 },
+      properties: preset.properties,
     });
-    setPlans((items) =>
-      items.map((item) => (item.id === plan.id ? { ...item, rooms: [...item.rooms, room] } : item)),
-    );
+    setPlans((items) => items.map((item) => (item.id === plan.id ? { ...item, rooms: [...item.rooms, room] } : item)));
     setSelection({ kind: "room", id: room.id });
   };
 
-  const addObject = async (
-    type: FloorPlanObjectType,
-    width: number,
-    height: number,
-    device?: number,
-  ) => {
+  const addObject = async (item: PaletteItem, device?: number) => {
     if (!plan) return;
     const object = await post<FloorPlanObject>("/floor-plan-objects/", {
       floor_plan: plan.id,
-      object_type: type,
-      x: Math.max(20, plan.width / 2 - width / 2),
-      y: Math.max(20, plan.height / 2 - height / 2),
-      width,
-      height,
+      object_type: item.type,
+      x: Math.max(20, plan.width / 2 - item.width / 2),
+      y: Math.max(20, plan.height / 2 - item.height / 2),
+      width: item.width,
+      height: item.height,
       rotation: 0,
-      z_index: type === "rug" ? -10 : 0,
-      properties: type === "label" ? { label: "Label" } : {},
+      z_index: item.type === "rug" ? -10 : 10,
+      properties: item.type === "label" ? { label: "Label" } : {},
       device: device || null,
     });
-    setPlans((items) =>
-      items.map((item) => (item.id === plan.id ? { ...item, objects: [...item.objects, object] } : item)),
-    );
+    setPlans((items) => items.map((current) => (current.id === plan.id ? { ...current, objects: [...current.objects, object] } : current)));
     setSelection({ kind: "object", id: object.id });
+  };
+
+  const addDevice = async () => {
+    const device = devices.find((item) => item.id === Number(newDeviceId));
+    if (!device) return;
+    await addObject({ type: "device", label: device.name, category: "Living", width: 62, height: 62 }, device.id);
+    setNewDeviceId("");
   };
 
   const deleteSelection = async (target: Selection) => {
     if (!plan || !target) return;
     if (target.kind === "room") {
       await remove(`/rooms/${target.id}/`);
-      setPlans((items) =>
-        items.map((item) =>
-          item.id === plan.id ? { ...item, rooms: item.rooms.filter((room) => room.id !== target.id) } : item,
-        ),
-      );
+      setPlans((items) => items.map((item) => (item.id === plan.id ? { ...item, rooms: item.rooms.filter((room) => room.id !== target.id) } : item)));
     } else {
       await remove(`/floor-plan-objects/${target.id}/`);
-      setPlans((items) =>
-        items.map((item) =>
-          item.id === plan.id
-            ? { ...item, objects: item.objects.filter((object) => object.id !== target.id) }
-            : item,
-        ),
-      );
+      setPlans((items) => items.map((item) => (item.id === plan.id ? { ...item, objects: item.objects.filter((object) => object.id !== target.id) } : item)));
     }
     setSelection(null);
   };
@@ -272,11 +244,11 @@ export default function FloorPlanPage() {
         z_index: selectedRoom.z_index,
         properties: selectedRoom.properties,
       });
-      setPlans((items) =>
-        items.map((item) => (item.id === plan.id ? { ...item, rooms: [...item.rooms, room] } : item)),
-      );
+      setPlans((items) => items.map((item) => (item.id === plan.id ? { ...item, rooms: [...item.rooms, room] } : item)));
       setSelection({ kind: "room", id: room.id });
-    } else if (selection.kind === "object" && selectedObject) {
+      return;
+    }
+    if (selection.kind === "object" && selectedObject) {
       const object = await post<FloorPlanObject>("/floor-plan-objects/", {
         floor_plan: plan.id,
         object_type: selectedObject.object_type,
@@ -289,12 +261,47 @@ export default function FloorPlanPage() {
         properties: selectedObject.properties,
         device: selectedObject.device || null,
       });
-      setPlans((items) =>
-        items.map((item) => (item.id === plan.id ? { ...item, objects: [...item.objects, object] } : item)),
-      );
+      setPlans((items) => items.map((item) => (item.id === plan.id ? { ...item, objects: [...item.objects, object] } : item)));
       setSelection({ kind: "object", id: object.id });
     }
   };
+
+  useEffect(() => {
+    const keyDown = (event: KeyboardEvent) => {
+      if (event.target instanceof HTMLInputElement || event.target instanceof HTMLTextAreaElement || event.target instanceof HTMLSelectElement) return;
+      if (event.key === "Escape") setSelection(null);
+      if ((event.key === "Delete" || event.key === "Backspace") && selection) {
+        event.preventDefault();
+        void deleteSelection(selection);
+      }
+      if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "d" && selection) {
+        event.preventDefault();
+        void duplicateSelection();
+      }
+      if (selection && ["ArrowLeft", "ArrowRight", "ArrowUp", "ArrowDown"].includes(event.key)) {
+        event.preventDefault();
+        const amount = event.shiftKey ? 10 : 1;
+        const delta = {
+          ArrowLeft: { x: -amount, y: 0 },
+          ArrowRight: { x: amount, y: 0 },
+          ArrowUp: { x: 0, y: -amount },
+          ArrowDown: { x: 0, y: amount },
+        }[event.key]!;
+        if (selection.kind === "room" && selectedRoom) {
+          const next = { ...selectedRoom, x: selectedRoom.x + delta.x, y: selectedRoom.y + delta.y };
+          updateRoomLocal(selectedRoom.id, next);
+          void saveRoom(next);
+        }
+        if (selection.kind === "object" && selectedObject) {
+          const next = { ...selectedObject, x: selectedObject.x + delta.x, y: selectedObject.y + delta.y };
+          updateObjectLocal(selectedObject.id, next);
+          void saveObject(next);
+        }
+      }
+    };
+    window.addEventListener("keydown", keyDown);
+    return () => window.removeEventListener("keydown", keyDown);
+  }, [selection, selectedRoom, selectedObject]);
 
   const pointFromEvent = (event: ReactPointerEvent<SVGSVGElement>) => {
     if (!plan) return { x: 0, y: 0 };
@@ -305,16 +312,28 @@ export default function FloorPlanPage() {
     };
   };
 
-  const startInteraction = (event: ReactPointerEvent<SVGElement>, next: Interaction) => {
+  const begin = (event: ReactPointerEvent<SVGElement>, next: Interaction) => {
     event.stopPropagation();
     event.currentTarget.ownerSVGElement?.setPointerCapture(event.pointerId);
     interaction.current = next;
   };
 
+  const roomWallTargets = (objects: FloorPlanObject[]) => {
+    const x: number[] = [];
+    const y: number[] = [];
+    for (const object of objects.filter((item) => item.object_type === "wall")) {
+      const end = wallEndPoint(object);
+      x.push(object.x, end.x);
+      y.push(object.y, end.y);
+    }
+    return { x, y };
+  };
+
   const handlePointerMove = (event: ReactPointerEvent<SVGSVGElement>) => {
-    if (!plan || !interaction.current) return;
-    const pointer = pointFromEvent(event);
+    const currentPlan = planRef.current;
     const current = interaction.current;
+    if (!currentPlan || !current) return;
+    const pointer = pointFromEvent(event);
 
     if (current.kind === "move-room") {
       const candidate = {
@@ -322,378 +341,306 @@ export default function FloorPlanPage() {
         x: current.origin.x + pointer.x - current.start.x,
         y: current.origin.y + pointer.y - current.start.y,
       };
-      updateRoomLocal(
-        current.id,
-        snapRoomPosition(
-          candidate,
-          plan.rooms,
-          { width: plan.width, height: plan.height },
-          snapEnabled,
-          roomGuidesFromWalls(plan.objects),
-        ),
-      );
+      const snapped = snapRoomPosition(candidate, currentPlan.rooms, currentPlan, snapEnabled, roomWallTargets(currentPlan.objects));
+      updateRoomLocal(current.id, snapped.value);
+      setGuides(snapped.guides);
       return;
     }
 
     if (current.kind === "resize-room") {
-      updateRoomLocal(
-        current.id,
-        resizeRect(
-          current.origin,
-          current.handle,
-          pointer,
-          plan.rooms,
-          { width: plan.width, height: plan.height },
-          snapEnabled,
-          undefined,
-          roomGuidesFromWalls(plan.objects),
-        ),
-      );
+      const resized = resizeRect(current.origin, current.handle, pointer, currentPlan.rooms, currentPlan, snapEnabled, 80, roomWallTargets(currentPlan.objects));
+      updateRoomLocal(current.id, resized.value);
+      setGuides(resized.guides);
       return;
     }
 
     if (current.kind === "wall-end") {
-      const walls = plan.objects.filter((item) => item.object_type === "wall") as (FloorPlanObject & {
-        rotation: number;
-      })[];
-      const targets = collectSnapPoints(plan.rooms, walls, current.id);
-      const snapped = snapPoint(pointer, targets, snapEnabled);
+      const walls = currentPlan.objects.filter((item) => item.object_type === "wall");
+      const snapped = snapPoint(pointer, collectSnapPoints(currentPlan.rooms, walls, current.id), snapEnabled);
       const start = { x: current.origin.x, y: current.origin.y };
       const end = wallEndPoint(current.origin);
-      const next =
-        current.end === "start"
-          ? wallFromEndpoints(snapped, end, current.origin.height)
-          : wallFromEndpoints(start, snapped, current.origin.height);
+      const next = current.end === "start"
+        ? wallFromEndpoints(snapped.value, end, current.origin.height)
+        : wallFromEndpoints(start, snapped.value, current.origin.height);
       updateObjectLocal(current.id, next);
+      setGuides(snapped.guides);
       return;
     }
 
     if (current.kind === "move-object") {
       const dx = pointer.x - current.start.x;
       const dy = pointer.y - current.start.y;
-      let x = current.origin.x + dx;
-      let y = current.origin.y + dy;
-
+      let next = {
+        ...current.origin,
+        x: current.origin.x + dx,
+        y: current.origin.y + dy,
+      };
       if (current.origin.object_type === "wall") {
-        const walls = plan.objects.filter((item) => item.object_type === "wall") as (FloorPlanObject & {
-          rotation: number;
-        })[];
-        const targets = collectSnapPoints(plan.rooms, walls, current.id);
-        const snapped = snapPoint({ x, y }, targets, snapEnabled);
-        x = snapped.x;
-        y = snapped.y;
+        const walls = currentPlan.objects.filter((item) => item.object_type === "wall");
+        const snapped = snapPoint({ x: next.x, y: next.y }, collectSnapPoints(currentPlan.rooms, walls, current.id), snapEnabled);
+        next = { ...next, x: snapped.value.x, y: snapped.value.y };
+        setGuides(snapped.guides);
       } else {
         if (snapEnabled) {
-          x = Math.round(x / GRID_SIZE) * GRID_SIZE;
-          y = Math.round(y / GRID_SIZE) * GRID_SIZE;
+          next.x = Math.round(next.x / GRID_SIZE) * GRID_SIZE;
+          next.y = Math.round(next.y / GRID_SIZE) * GRID_SIZE;
         }
-        const opening = snapOpeningToRoom(
-          { ...current.origin, x, y },
-          plan.rooms,
-          snapEnabled && OPENING_TYPES.has(current.origin.object_type),
-        );
-        x = opening.x;
-        y = opening.y;
-        if (opening.rotation !== undefined) updateObjectLocal(current.id, { rotation: opening.rotation });
+        if (OPENING_TYPES.has(next.object_type)) next = { ...next, ...snapOpeningToRooms(next, currentPlan.rooms, snapEnabled) };
+        next.x = clamp(next.x, 0, Math.max(0, currentPlan.width - next.width));
+        next.y = clamp(next.y, 0, Math.max(0, currentPlan.height - next.height));
       }
-      updateObjectLocal(current.id, {
-        x: clamp(x, 0, Math.max(0, plan.width - current.origin.width)),
-        y: clamp(y, 0, Math.max(0, plan.height - current.origin.height)),
-      });
+      updateObjectLocal(current.id, next);
       return;
     }
 
     if (current.kind === "resize-object") {
-      updateObjectLocal(
-        current.id,
-        resizeRect(
-          current.origin,
-          current.handle,
-          pointer,
-          plan.rooms,
-          { width: plan.width, height: plan.height },
-          snapEnabled,
-          MIN_OBJECT_SIZE,
-        ),
-      );
+      const resized = resizeRect(current.origin, current.handle, pointer, [], currentPlan, snapEnabled, MIN_OBJECT_SIZE);
+      updateObjectLocal(current.id, resized.value);
+      setGuides(resized.guides);
     }
   };
 
-  const finishInteraction = () => {
-    if (!plan || !interaction.current) return;
+  const finishInteraction = async () => {
     const current = interaction.current;
     interaction.current = null;
-    if (current.kind === "move-room" || current.kind === "resize-room") {
-      const room = plan.rooms.find((item) => item.id === current.id);
-      if (room) void saveRoom(room);
-    } else {
-      const object = plan.objects.find((item) => item.id === current.id);
-      if (object) void saveObject(object);
+    setGuides([]);
+    if (!current) return;
+    const latest = planRef.current;
+    if (!latest) return;
+    try {
+      if (current.kind === "move-room" || current.kind === "resize-room") {
+        const room = latest.rooms.find((item) => item.id === current.id);
+        if (room) await saveRoom(room);
+      } else {
+        const object = latest.objects.find((item) => item.id === current.id);
+        if (object) await saveObject(object);
+      }
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : "Could not save floor-plan changes");
     }
   };
+
+  const changeSelectedRoom = async (changes: Partial<Room>) => {
+    if (!selectedRoom) return;
+    const next = { ...selectedRoom, ...changes };
+    updateRoomLocal(selectedRoom.id, changes);
+    try {
+      await saveRoom(next);
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : "Could not save room");
+    }
+  };
+
+  const changeSelectedObject = async (changes: Partial<FloorPlanObject>) => {
+    if (!selectedObject) return;
+    const next = { ...selectedObject, ...changes };
+    updateObjectLocal(selectedObject.id, changes);
+    try {
+      await saveObject(next);
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : "Could not save object");
+    }
+  };
+
+  if (!plan) return <div className="text-zinc-400">Loading floor plans…</div>;
 
   return (
     <div className="space-y-5">
-      <header className="flex flex-wrap items-end justify-between gap-3">
+      <header className="flex flex-wrap items-end justify-between gap-4">
         <div>
-          <h1 className="text-3xl font-bold">Floor Plans</h1>
-          <p className="mt-2 max-w-4xl text-zinc-400">
-            Build the floor plan first, then layer HomeHub devices onto it. Rooms and wall endpoints snap together,
-            and selected rooms or furniture can be resized directly from their corner handles.
+          <h1 className="text-3xl font-bold text-white">Floor Plan Designer</h1>
+          <p className="mt-2 max-w-3xl text-zinc-400">
+            Build the house room-by-room, snap spaces together, furnish them, then layer live HomeHub devices on top.
           </p>
         </div>
-        <button
-          onClick={createPlan}
-          className="rounded-lg border border-cyan-700 px-4 py-2 text-sm text-cyan-300"
-        >
-          New floor
-        </button>
+        <div className="flex flex-wrap items-center gap-2">
+          <select
+            value={plan.id}
+            onChange={(event) => { setPlanId(Number(event.target.value)); setSelection(null); }}
+            className="rounded-lg border border-zinc-700 bg-zinc-950 px-3 py-2 text-sm"
+          >
+            {plans.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}
+          </select>
+          <button onClick={() => void createPlan()} className="rounded-lg border border-zinc-700 px-3 py-2 text-sm">New floor</button>
+          <button onClick={() => setSnapEnabled((value) => !value)} className={`rounded-lg border px-3 py-2 text-sm ${snapEnabled ? "border-cyan-600 bg-cyan-950/40 text-cyan-200" : "border-zinc-700"}`}>
+            Snap {snapEnabled ? "on" : "off"}
+          </button>
+          <button onClick={() => setGridVisible((value) => !value)} className="rounded-lg border border-zinc-700 px-3 py-2 text-sm">Grid</button>
+          <button onClick={() => setZoom((value) => Math.max(.5, value - .1))} className="rounded-lg border border-zinc-700 px-3 py-2">−</button>
+          <span className="w-14 text-center text-xs text-zinc-500">{Math.round(zoom * 100)}%</span>
+          <button onClick={() => setZoom((value) => Math.min(2.2, value + .1))} className="rounded-lg border border-zinc-700 px-3 py-2">+</button>
+        </div>
       </header>
 
-      {error && <div className="rounded-xl bg-red-950/40 p-3 text-sm text-red-300">{error}</div>}
+      {error && <div className="rounded-xl border border-red-900 bg-red-950/40 p-3 text-sm text-red-300">{error}</div>}
 
-      <div className="flex gap-2 overflow-x-auto">
-        {plans.map((item) => (
-          <button
-            key={item.id}
-            onClick={() => {
-              setPlanId(item.id);
-              setSelection(null);
-            }}
-            className={`rounded-lg px-4 py-2 text-sm ${
-              item.id === planId ? "bg-cyan-600 text-white" : "bg-zinc-900 text-zinc-400"
-            }`}
-          >
-            {item.name}
-          </button>
-        ))}
-      </div>
-
-      {plan && (
-        <>
-          <div className="flex flex-wrap items-center gap-2 rounded-xl border border-zinc-800 bg-zinc-900/60 p-3 text-xs">
-            <button onClick={addRoom} className="rounded-lg bg-cyan-700 px-3 py-2 font-semibold text-white">
-              + Room
-            </button>
-            <button
-              onClick={() => {
-                const wall = floorPlanPalette.find((item) => item.type === "wall");
-                if (wall) void addObject("wall", wall.width, wall.height);
-              }}
-              className="rounded-lg border border-zinc-700 px-3 py-2"
-            >
-              + Wall
-            </button>
-            <span className="mx-1 h-6 w-px bg-zinc-800" />
-            <label className="flex items-center gap-2 rounded-lg border border-zinc-800 px-3 py-2">
-              <input type="checkbox" checked={snapEnabled} onChange={(event) => setSnapEnabled(event.target.checked)} />
-              Snap
-            </label>
-            <label className="flex items-center gap-2 rounded-lg border border-zinc-800 px-3 py-2">
-              <input type="checkbox" checked={gridVisible} onChange={(event) => setGridVisible(event.target.checked)} />
-              Grid
-            </label>
-            <span className="text-zinc-500">Grid {GRID_SIZE}px</span>
-            <span className="ml-auto text-zinc-500">Zoom</span>
-            <button onClick={() => setZoom((value) => clamp(value - 0.1, 0.5, 2))} className="rounded border border-zinc-700 px-2 py-1">
-              −
-            </button>
-            <span className="w-12 text-center">{Math.round(zoom * 100)}%</span>
-            <button onClick={() => setZoom((value) => clamp(value + 0.1, 0.5, 2))} className="rounded border border-zinc-700 px-2 py-1">
-              +
-            </button>
-            {selection && (
-              <>
-                <button onClick={() => void duplicateSelection()} className="rounded border border-zinc-700 px-3 py-2">
-                  Duplicate
-                </button>
-                <button onClick={() => void deleteSelection(selection)} className="rounded border border-red-900 px-3 py-2 text-red-400">
-                  Delete
-                </button>
-              </>
-            )}
+      <div className="grid min-h-[720px] gap-4 xl:grid-cols-[280px_minmax(0,1fr)_280px]">
+        <aside className="rounded-2xl border border-zinc-800 bg-zinc-900/70 p-4">
+          <div className="grid grid-cols-3 rounded-xl bg-zinc-950 p-1 text-xs">
+            {(["rooms", "objects", "devices"] as const).map((tab) => (
+              <button key={tab} onClick={() => setLibraryTab(tab)} className={`rounded-lg px-2 py-2 capitalize ${libraryTab === tab ? "bg-zinc-800 text-white" : "text-zinc-500"}`}>{tab}</button>
+            ))}
           </div>
 
-          <div className="grid gap-4 xl:grid-cols-[250px_minmax(0,1fr)_280px]">
-            <aside className="rounded-2xl border border-zinc-800 bg-zinc-900/70 p-4">
-              <h2 className="text-sm font-semibold uppercase tracking-wider text-zinc-500">Library</h2>
-              <input
-                value={paletteSearch}
-                onChange={(event) => setPaletteSearch(event.target.value)}
-                placeholder="Search objects"
-                className="mt-3 w-full rounded-lg border border-zinc-700 bg-zinc-950 px-3 py-2 text-sm"
-              />
-              <select
-                value={paletteCategory}
-                onChange={(event) => setPaletteCategory(event.target.value as typeof paletteCategory)}
-                className="mt-2 w-full rounded-lg border border-zinc-700 bg-zinc-950 px-3 py-2 text-sm"
-              >
-                <option value="All">All categories</option>
-                {paletteCategories.map((category) => (
-                  <option key={category}>{category}</option>
-                ))}
-              </select>
-              <div className="mt-3 grid max-h-[540px] grid-cols-2 gap-2 overflow-y-auto pr-1">
-                {filteredPalette.map((item, index) => (
-                  <button
-                    key={`${item.type}-${item.category}-${index}`}
-                    onClick={() => void addObject(item.type, item.width, item.height)}
-                    className="min-h-14 rounded-lg border border-zinc-700 bg-zinc-950 px-2 py-2 text-left text-xs hover:border-cyan-500"
-                  >
-                    <span className="block font-medium text-zinc-200">{item.label}</span>
-                    <span className="mt-1 block text-[10px] text-zinc-600">{item.category}</span>
+          {libraryTab === "rooms" && (
+            <div className="mt-4">
+              <h2 className="text-sm font-semibold text-white">Create rooms</h2>
+              <p className="mt-1 text-xs leading-5 text-zinc-500">Rooms include their perimeter walls. Drag a room or its corner handles and adjacent edges snap together.</p>
+              <div className="mt-3 grid gap-2">
+                {roomPresets.map((preset) => (
+                  <button key={preset.label} onClick={() => void addRoom(preset)} className="flex items-center justify-between rounded-xl border border-zinc-800 bg-zinc-950/70 px-3 py-2.5 text-left hover:border-cyan-700">
+                    <span className="text-sm text-zinc-200">{preset.label}</span>
+                    <span className="text-[10px] text-zinc-600">{preset.width}×{preset.height}</span>
                   </button>
                 ))}
               </div>
+            </div>
+          )}
 
-              <div className="mt-5 border-t border-zinc-800 pt-4">
-                <div className="mb-2 text-xs uppercase text-zinc-500">HomeHub device</div>
-                <select
-                  value={newDeviceId}
-                  onChange={(event) => setNewDeviceId(event.target.value)}
-                  className="w-full rounded-lg border border-zinc-700 bg-zinc-950 p-2 text-xs"
-                >
-                  <option value="">Select device</option>
-                  {devices.map((device) => (
-                    <option key={device.id} value={device.id}>
-                      {device.name}
-                    </option>
-                  ))}
-                </select>
-                <button
-                  disabled={!newDeviceId}
-                  onClick={() => {
-                    void addObject("device", 70, 70, Number(newDeviceId));
-                    setNewDeviceId("");
-                  }}
-                  className="mt-2 w-full rounded-lg bg-cyan-700 px-3 py-2 text-xs font-semibold disabled:opacity-40"
-                >
-                  Place device
-                </button>
+          {libraryTab === "objects" && (
+            <div className="mt-4">
+              <input value={paletteSearch} onChange={(event) => setPaletteSearch(event.target.value)} placeholder="Search objects…" className="w-full rounded-lg border border-zinc-700 bg-zinc-950 px-3 py-2 text-sm" />
+              <div className="mt-2 flex max-h-20 flex-wrap gap-1 overflow-auto">
+                <button onClick={() => setPaletteCategory("All")} className={`rounded-md px-2 py-1 text-[10px] ${paletteCategory === "All" ? "bg-cyan-900 text-cyan-100" : "bg-zinc-800 text-zinc-400"}`}>All</button>
+                {paletteCategories.map((category) => (
+                  <button key={category} onClick={() => setPaletteCategory(category)} className={`rounded-md px-2 py-1 text-[10px] ${paletteCategory === category ? "bg-cyan-900 text-cyan-100" : "bg-zinc-800 text-zinc-400"}`}>{category}</button>
+                ))}
               </div>
-            </aside>
-
-            <div className="overflow-auto rounded-2xl border border-zinc-800 bg-zinc-950 p-4">
-              <div style={{ width: `${zoom * 100}%`, minWidth: 760 }}>
-                <svg
-                  viewBox={`0 0 ${plan.width} ${plan.height}`}
-                  onPointerMove={handlePointerMove}
-                  onPointerUp={finishInteraction}
-                  onPointerCancel={finishInteraction}
-                  onPointerDown={(event) => {
-                    if (event.target === event.currentTarget) setSelection(null);
-                  }}
-                  className="aspect-[3/2] w-full select-none rounded-xl bg-zinc-900 shadow-inner"
-                  style={{ touchAction: "none" }}
-                >
-                  <defs>
-                    <pattern id="floor-grid-small" width={GRID_SIZE} height={GRID_SIZE} patternUnits="userSpaceOnUse">
-                      <path d={`M ${GRID_SIZE} 0 L 0 0 0 ${GRID_SIZE}`} fill="none" stroke="#27272a" strokeWidth="0.7" />
-                    </pattern>
-                    <pattern id="floor-grid-large" width={GRID_SIZE * 5} height={GRID_SIZE * 5} patternUnits="userSpaceOnUse">
-                      <rect width={GRID_SIZE * 5} height={GRID_SIZE * 5} fill="url(#floor-grid-small)" />
-                      <path d={`M ${GRID_SIZE * 5} 0 L 0 0 0 ${GRID_SIZE * 5}`} fill="none" stroke="#3f3f46" strokeWidth="1" />
-                    </pattern>
-                  </defs>
-                  {gridVisible && <rect width={plan.width} height={plan.height} fill="url(#floor-grid-large)" />}
-
-                  {plan.rooms.map((room) => (
-                    <RoomShape
-                      key={room.id}
-                      room={room}
-                      selected={selection?.kind === "room" && selection.id === room.id}
-                      onMoveStart={(event) => {
-                        setSelection({ kind: "room", id: room.id });
-                        startInteraction(event, {
-                          kind: "move-room",
-                          id: room.id,
-                          start: pointFromChildEvent(event, plan),
-                          origin: { ...room },
-                        });
-                      }}
-                      onResizeStart={(event, handle) =>
-                        startInteraction(event, {
-                          kind: "resize-room",
-                          id: room.id,
-                          handle,
-                          origin: { ...room },
-                        })
-                      }
-                      onSelect={() => setSelection({ kind: "room", id: room.id })}
-                    />
-                  ))}
-
-                  {plan.objects.map((object) => (
-                    <ObjectShape
-                      key={object.id}
-                      obj={object}
-                      device={object.device ? deviceById.get(object.device) : undefined}
-                      selected={selection?.kind === "object" && selection.id === object.id}
-                      onMoveStart={(event) => {
-                        setSelection({ kind: "object", id: object.id });
-                        startInteraction(event, {
-                          kind: "move-object",
-                          id: object.id,
-                          start: pointFromChildEvent(event, plan),
-                          origin: { ...object },
-                        });
-                      }}
-                      onResizeStart={(event, handle) =>
-                        startInteraction(event, {
-                          kind: "resize-object",
-                          id: object.id,
-                          handle,
-                          origin: { ...object },
-                        })
-                      }
-                      onWallEndStart={(event, end) =>
-                        startInteraction(event, {
-                          kind: "wall-end",
-                          id: object.id,
-                          end,
-                          origin: { ...object },
-                        })
-                      }
-                      onSelect={() => setSelection({ kind: "object", id: object.id })}
-                      onOpen={setDeviceModal}
-                    />
-                  ))}
-                </svg>
+              <div className="mt-3 grid max-h-[560px] gap-2 overflow-auto pr-1">
+                {filteredPalette.map((item, index) => (
+                  <button key={`${item.type}-${item.category}-${index}`} onClick={() => void addObject(item)} className="flex items-center gap-3 rounded-xl border border-zinc-800 bg-zinc-950/70 p-2.5 text-left hover:border-cyan-700">
+                    <ObjectLibraryIcon type={item.type} />
+                    <span className="min-w-0"><span className="block text-sm text-zinc-200">{item.label}</span><span className="block text-[10px] text-zinc-600">{item.category}</span></span>
+                  </button>
+                ))}
               </div>
             </div>
+          )}
 
-            <aside className="rounded-2xl border border-zinc-800 bg-zinc-900/70 p-4">
-              {selectedRoom ? (
-                <RoomInspector
-                  room={selectedRoom}
-                  onChange={(changes) => updateRoomLocal(selectedRoom.id, changes)}
-                  onSave={() => {
-                    const current = plan.rooms.find((item) => item.id === selectedRoom.id);
-                    if (current) void saveRoom(current);
+          {libraryTab === "devices" && (
+            <div className="mt-4 space-y-3">
+              <div>
+                <h2 className="text-sm font-semibold text-white">HomeHub devices</h2>
+                <p className="mt-1 text-xs leading-5 text-zinc-500">Place a linked device on the plan. Its state and controls remain live.</p>
+              </div>
+              <select value={newDeviceId} onChange={(event) => setNewDeviceId(event.target.value)} className="w-full rounded-lg border border-zinc-700 bg-zinc-950 p-2 text-sm">
+                <option value="">Select a device…</option>
+                {devices.map((device) => <option key={device.id} value={device.id}>{device.name}</option>)}
+              </select>
+              <button disabled={!newDeviceId} onClick={() => void addDevice()} className="w-full rounded-lg bg-cyan-700 px-3 py-2 text-sm font-semibold disabled:opacity-40">Place device</button>
+              <div className="space-y-2 pt-2">
+                {devices.map((device) => (
+                  <div key={device.id} className="rounded-xl border border-zinc-800 bg-zinc-950/70 p-3">
+                    <div className="flex items-center justify-between"><span className="text-sm text-zinc-200">{device.name}</span><span className={`h-2.5 w-2.5 rounded-full ${deviceIsActive(device) ? "bg-emerald-400" : "bg-zinc-600"}`} /></div>
+                    <div className="mt-1 text-[10px] uppercase tracking-wide text-zinc-600">{device.device_type} · {String(device.state?.status || device.status)}</div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+        </aside>
+
+        <main className="overflow-auto rounded-2xl border border-zinc-800 bg-zinc-950 p-4">
+          <div className="mx-auto origin-top-left" style={{ width: `${zoom * 100}%`, minWidth: 620 }}>
+            <svg
+              viewBox={`0 0 ${plan.width} ${plan.height}`}
+              className="w-full touch-none select-none rounded-lg bg-[#111315] shadow-2xl"
+              onPointerMove={handlePointerMove}
+              onPointerUp={() => void finishInteraction()}
+              onPointerCancel={() => void finishInteraction()}
+              onPointerDown={() => setSelection(null)}
+            >
+              <defs>
+                <pattern id="smallGrid" width={GRID_SIZE} height={GRID_SIZE} patternUnits="userSpaceOnUse">
+                  <path d={`M ${GRID_SIZE} 0 L 0 0 0 ${GRID_SIZE}`} fill="none" stroke="#27272a" strokeWidth="0.7" />
+                </pattern>
+                <pattern id="grid" width={GRID_SIZE * 5} height={GRID_SIZE * 5} patternUnits="userSpaceOnUse">
+                  <rect width={GRID_SIZE * 5} height={GRID_SIZE * 5} fill="url(#smallGrid)" />
+                  <path d={`M ${GRID_SIZE * 5} 0 L 0 0 0 ${GRID_SIZE * 5}`} fill="none" stroke="#3f3f46" strokeWidth="1" />
+                </pattern>
+              </defs>
+              {gridVisible && <rect width="100%" height="100%" fill="url(#grid)" />}
+
+              {plan.rooms.map((room) => (
+                <RoomShape
+                  key={room.id}
+                  room={room}
+                  selected={selection?.kind === "room" && selection.id === room.id}
+                  onSelect={(event) => {
+                    setSelection({ kind: "room", id: room.id });
+                    begin(event, { kind: "move-room", id: room.id, start: pointFromEvent(event as unknown as ReactPointerEvent<SVGSVGElement>), origin: room });
+                  }}
+                  onResize={(event, handle) => {
+                    setSelection({ kind: "room", id: room.id });
+                    begin(event, { kind: "resize-room", id: room.id, handle, origin: room });
                   }}
                 />
-              ) : selectedObject ? (
-                <ObjectInspector
-                  obj={selectedObject}
-                  device={selectedObject.device ? deviceById.get(selectedObject.device) : undefined}
-                  onChange={(changes) => updateObjectLocal(selectedObject.id, changes)}
-                  onSave={() => {
-                    const current = plan.objects.find((item) => item.id === selectedObject.id);
-                    if (current) void saveObject(current);
-                  }}
-                  onOpen={setDeviceModal}
-                />
-              ) : (
-                <div className="space-y-3 text-sm text-zinc-500">
-                  <p>Select a room or object to edit it.</p>
-                  <p>Rooms resize from their four corners. Walls resize from either endpoint.</p>
-                  <p>Delete/Backspace removes the selection; Escape clears it.</p>
-                </div>
-              )}
-            </aside>
+              ))}
+
+              {plan.objects.map((object) => {
+                const device = object.device ? deviceById.get(object.device) : undefined;
+                return (
+                  <ObjectShape
+                    key={object.id}
+                    object={object}
+                    device={device}
+                    selected={selection?.kind === "object" && selection.id === object.id}
+                    onSelect={(event) => {
+                      setSelection({ kind: "object", id: object.id });
+                      begin(event, { kind: "move-object", id: object.id, start: pointFromEvent(event as unknown as ReactPointerEvent<SVGSVGElement>), origin: object });
+                    }}
+                    onResize={(event, handle) => begin(event, { kind: "resize-object", id: object.id, handle, origin: object })}
+                    onWallEnd={(event, end) => begin(event, { kind: "wall-end", id: object.id, end, origin: object })}
+                    onOpenDevice={() => device && setDeviceModal(device)}
+                  />
+                );
+              })}
+
+              {guides.map((guide, index) => guide.axis === "x"
+                ? <line key={`${guide.axis}-${index}`} x1={guide.value} y1={0} x2={guide.value} y2={plan.height} stroke="#22d3ee" strokeWidth="1.5" strokeDasharray="8 8" opacity=".8" />
+                : <line key={`${guide.axis}-${index}`} x1={0} y1={guide.value} x2={plan.width} y2={guide.value} stroke="#22d3ee" strokeWidth="1.5" strokeDasharray="8 8" opacity=".8" />)}
+            </svg>
           </div>
-        </>
-      )}
+        </main>
+
+        <aside className="rounded-2xl border border-zinc-800 bg-zinc-900/70 p-4">
+          {!selection && (
+            <div>
+              <h2 className="font-semibold text-white">Inspector</h2>
+              <p className="mt-2 text-sm leading-6 text-zinc-500">Select a room, wall, furnishing or device. Drag items to position them and drag blue corner handles to resize.</p>
+              <div className="mt-5 rounded-xl bg-zinc-950 p-3 text-xs leading-6 text-zinc-500">
+                <div><span className="text-zinc-300">Delete</span> remove selection</div>
+                <div><span className="text-zinc-300">Ctrl/Cmd + D</span> duplicate</div>
+                <div><span className="text-zinc-300">Arrow keys</span> nudge 1 unit</div>
+                <div><span className="text-zinc-300">Shift + arrows</span> nudge 10</div>
+              </div>
+            </div>
+          )}
+
+          {selectedRoom && (
+            <RoomInspector
+              room={selectedRoom}
+              onChange={(changes) => void changeSelectedRoom(changes)}
+              onDuplicate={() => void duplicateSelection()}
+              onDelete={() => void deleteSelection(selection)}
+            />
+          )}
+
+          {selectedObject && (
+            <ObjectInspector
+              object={selectedObject}
+              device={selectedObject.device ? deviceById.get(selectedObject.device) : undefined}
+              onChange={(changes) => void changeSelectedObject(changes)}
+              onDuplicate={() => void duplicateSelection()}
+              onDelete={() => void deleteSelection(selection)}
+              onOpenDevice={() => {
+                const device = selectedObject.device ? deviceById.get(selectedObject.device) : undefined;
+                if (device) setDeviceModal(device);
+              }}
+            />
+          )}
+        </aside>
+      </div>
 
       <DeviceModal
         open={!!deviceModal}
@@ -701,549 +648,194 @@ export default function FloorPlanPage() {
         onClose={() => setDeviceModal(null)}
         onChanged={(device) => {
           setDeviceModal(device);
-          setDevices((items) => items.map((item) => (item.id === device.id ? device : item)));
+          setDevices((items) => items.map((item) => item.id === device.id ? device : item));
         }}
       />
     </div>
   );
 }
 
-function pointFromChildEvent(event: ReactPointerEvent<SVGElement>, plan: FloorPlan) {
-  const svg = event.currentTarget.ownerSVGElement;
-  if (!svg) return { x: 0, y: 0 };
-  const rect = svg.getBoundingClientRect();
-  return {
-    x: ((event.clientX - rect.left) * plan.width) / rect.width,
-    y: ((event.clientY - rect.top) * plan.height) / rect.height,
-  };
-}
-
-function roomGuidesFromWalls(objects: FloorPlanObject[]) {
-  const x: number[] = [];
-  const y: number[] = [];
-  for (const wall of objects.filter((item) => item.object_type === "wall")) {
-    const angle = ((wall.rotation % 180) + 180) % 180;
-    if (Math.abs(angle - 90) < 5) x.push(wall.x);
-    if (angle < 5 || Math.abs(angle - 180) < 5) y.push(wall.y);
-  }
-  return { x, y };
-}
-
-function snapOpeningToRoom(object: FloorPlanObject, rooms: Room[], enabled: boolean) {
-  if (!enabled) return { x: object.x, y: object.y, rotation: object.rotation };
-  const cx = object.x + object.width / 2;
-  const cy = object.y + object.height / 2;
-  let best: { distance: number; x: number; y: number; rotation: number } | null = null;
-  for (const room of rooms) {
-    const candidates = [
-      { distance: Math.abs(cy - room.y), x: object.x, y: room.y - object.height / 2, rotation: 0 },
-      {
-        distance: Math.abs(cy - (room.y + room.height)),
-        x: object.x,
-        y: room.y + room.height - object.height / 2,
-        rotation: 0,
-      },
-      { distance: Math.abs(cx - room.x), x: room.x - object.width / 2, y: object.y, rotation: 90 },
-      {
-        distance: Math.abs(cx - (room.x + room.width)),
-        x: room.x + room.width - object.width / 2,
-        y: object.y,
-        rotation: 90,
-      },
-    ];
-    for (const candidate of candidates) {
-      if (candidate.distance <= 18 && (!best || candidate.distance < best.distance)) best = candidate;
-    }
-  }
-  return best || { x: object.x, y: object.y, rotation: object.rotation };
-}
-
-function RoomShape({
-  room,
-  selected,
-  onMoveStart,
-  onResizeStart,
-  onSelect,
-}: {
+function RoomShape({ room, selected, onSelect, onResize }: {
   room: Room;
   selected: boolean;
-  onMoveStart: (event: ReactPointerEvent<SVGElement>) => void;
-  onResizeStart: (event: ReactPointerEvent<SVGElement>, handle: ResizeHandle) => void;
-  onSelect: () => void;
+  onSelect: (event: ReactPointerEvent<SVGElement>) => void;
+  onResize: (event: ReactPointerEvent<SVGElement>, handle: ResizeHandle) => void;
 }) {
-  const wallThickness = Number(room.properties?.wall_thickness || 12);
-  const handles: { handle: ResizeHandle; x: number; y: number }[] = [
-    { handle: "nw", x: room.x, y: room.y },
-    { handle: "ne", x: room.x + room.width, y: room.y },
-    { handle: "se", x: room.x + room.width, y: room.y + room.height },
-    { handle: "sw", x: room.x, y: room.y + room.height },
-  ];
+  const wall = Number(room.properties?.wall_thickness || 14);
+  const fill = roomFill(String(room.properties?.room_type || "room"));
   return (
-    <g onPointerDown={onSelect}>
+    <g>
       <rect
         x={room.x}
         y={room.y}
         width={room.width}
         height={room.height}
-        fill={selected ? "#164e6333" : "#18181b88"}
-        stroke={selected ? "#22d3ee" : "#a1a1aa"}
-        strokeWidth={wallThickness}
-        onPointerDown={onMoveStart}
-        style={{ cursor: "move" }}
+        rx="2"
+        fill={fill}
+        stroke={selected ? "#22d3ee" : "#d4d4d8"}
+        strokeWidth={selected ? wall + 3 : wall}
+        className="cursor-move"
+        onPointerDown={onSelect}
       />
-      <text
-        x={room.x + room.width / 2}
-        y={room.y + 24}
-        textAnchor="middle"
-        fill="#d4d4d8"
-        fontSize="14"
-        pointerEvents="none"
-      >
-        {room.name}
-      </text>
-      <text
-        x={room.x + room.width / 2}
-        y={room.y + 42}
-        textAnchor="middle"
-        fill="#71717a"
-        fontSize="10"
-        pointerEvents="none"
-      >
-        {Math.round(room.width)} × {Math.round(room.height)}
-      </text>
-      {selected &&
-        handles.map((item) => (
-          <rect
-            key={item.handle}
-            x={item.x - 7}
-            y={item.y - 7}
-            width="14"
-            height="14"
-            rx="2"
-            fill="#22d3ee"
-            stroke="#083344"
-            strokeWidth="2"
-            onPointerDown={(event) => onResizeStart(event, item.handle)}
-            style={{ cursor: `${item.handle}-resize` }}
-          />
-        ))}
+      <text x={room.x + room.width / 2} y={room.y + room.height / 2 - 4} textAnchor="middle" fill="#e4e4e7" fontSize="18" pointerEvents="none">{room.name}</text>
+      <text x={room.x + room.width / 2} y={room.y + room.height / 2 + 18} textAnchor="middle" fill="#71717a" fontSize="11" pointerEvents="none">{Math.round(room.width)} × {Math.round(room.height)}</text>
+      {selected && <>
+        <DimensionLine x1={room.x} y1={room.y - 20} x2={room.x + room.width} y2={room.y - 20} label={`${Math.round(room.width)}`} />
+        <DimensionLine x1={room.x - 20} y1={room.y} x2={room.x - 20} y2={room.y + room.height} label={`${Math.round(room.height)}`} vertical />
+        {cornerHandles(room).map(({ key, x, y }) => <ResizeHandleCircle key={key} x={x} y={y} onPointerDown={(event) => onResize(event, key)} />)}
+      </>}
     </g>
   );
 }
 
-function ObjectShape({
-  obj,
-  device,
-  selected,
-  onMoveStart,
-  onResizeStart,
-  onWallEndStart,
-  onSelect,
-  onOpen,
-}: {
-  obj: FloorPlanObject;
+function ObjectShape({ object, device, selected, onSelect, onResize, onWallEnd, onOpenDevice }: {
+  object: FloorPlanObject;
   device?: Device;
   selected: boolean;
-  onMoveStart: (event: ReactPointerEvent<SVGElement>) => void;
-  onResizeStart: (event: ReactPointerEvent<SVGElement>, handle: ResizeHandle) => void;
-  onWallEndStart: (event: ReactPointerEvent<SVGElement>, end: "start" | "end") => void;
-  onSelect: () => void;
-  onOpen: (device: Device) => void;
+  onSelect: (event: ReactPointerEvent<SVGElement>) => void;
+  onResize: (event: ReactPointerEvent<SVGElement>, handle: ResizeHandle) => void;
+  onWallEnd: (event: ReactPointerEvent<SVGElement>, end: "start" | "end") => void;
+  onOpenDevice: () => void;
 }) {
-  const location = device?.state?.location;
-  const moving =
-    obj.object_type === "device" && location && Number.isFinite(location.x) && Number.isFinite(location.y);
-  const x = moving ? Number(location.x) : obj.x;
-  const y = moving ? Number(location.y) : obj.y;
-  const tone = device ? statusTone(device) : "inactive";
-  const deviceFill = tone === "active" ? "#065f46" : tone === "error" ? "#7f1d1d" : "#3f3f46";
-  const stroke = selected ? "#22d3ee" : "#71717a";
-
-  if (obj.object_type === "wall") {
-    const end = wallEndPoint(obj);
-    return (
-      <g onPointerDown={onSelect}>
-        <line
-          x1={x}
-          y1={y}
-          x2={end.x}
-          y2={end.y}
-          stroke={selected ? "#d4d4d8" : "#a1a1aa"}
-          strokeWidth={obj.height}
-          strokeLinecap="square"
-          onPointerDown={onMoveStart}
-          style={{ cursor: "move" }}
-        />
-        {selected && (
-          <>
-            <circle
-              cx={x}
-              cy={y}
-              r="9"
-              fill="#22d3ee"
-              stroke="#083344"
-              strokeWidth="2"
-              onPointerDown={(event) => onWallEndStart(event, "start")}
-              style={{ cursor: "crosshair" }}
-            />
-            <circle
-              cx={end.x}
-              cy={end.y}
-              r="9"
-              fill="#22d3ee"
-              stroke="#083344"
-              strokeWidth="2"
-              onPointerDown={(event) => onWallEndStart(event, "end")}
-              style={{ cursor: "crosshair" }}
-            />
-          </>
-        )}
-      </g>
-    );
+  if (object.object_type === "wall") {
+    const end = wallEndPoint(object);
+    return <g>
+      <line x1={object.x} y1={object.y} x2={end.x} y2={end.y} stroke={selected ? "#22d3ee" : "#e4e4e7"} strokeWidth={object.height} strokeLinecap="square" className="cursor-move" onPointerDown={onSelect} />
+      {selected && <>
+        <circle cx={object.x} cy={object.y} r="9" fill="#22d3ee" stroke="#083344" strokeWidth="3" className="cursor-crosshair" onPointerDown={(event) => { event.stopPropagation(); onWallEnd(event, "start"); }} />
+        <circle cx={end.x} cy={end.y} r="9" fill="#22d3ee" stroke="#083344" strokeWidth="3" className="cursor-crosshair" onPointerDown={(event) => { event.stopPropagation(); onWallEnd(event, "end"); }} />
+        <DimensionLine x1={object.x} y1={object.y - 18} x2={end.x} y2={end.y - 18} label={`${Math.round(object.width)}`} />
+      </>}
+    </g>;
   }
 
-  const transform = `rotate(${obj.rotation} ${x + obj.width / 2} ${y + obj.height / 2})`;
-  const handles: { handle: ResizeHandle; x: number; y: number }[] = [
-    { handle: "nw", x, y },
-    { handle: "ne", x: x + obj.width, y },
-    { handle: "se", x: x + obj.width, y: y + obj.height },
-    { handle: "sw", x, y: y + obj.height },
-  ];
-
-  const common = {
-    onPointerDown: onMoveStart,
-    onDoubleClick: () => device && onOpen(device),
-    style: { cursor: "move" },
-  };
-
-  const body = renderObjectBody(obj, x, y, stroke, deviceFill, device);
+  const tone = device ? statusTone(device) : "inactive";
+  const active = device ? deviceIsActive(device) : false;
+  const cx = object.x + object.width / 2;
+  const cy = object.y + object.height / 2;
+  const canResize = !NON_RESIZABLE.has(object.object_type);
   return (
-    <g onPointerDown={onSelect} transform={transform}>
-      <g {...common}>{body}</g>
-      {selected &&
-        obj.object_type !== "label" &&
-        handles.map((item) => (
-          <rect
-            key={item.handle}
-            x={item.x - 6}
-            y={item.y - 6}
-            width="12"
-            height="12"
-            rx="2"
-            fill="#22d3ee"
-            stroke="#083344"
-            strokeWidth="2"
-            onPointerDown={(event) => onResizeStart(event, item.handle)}
-          />
-        ))}
+    <g transform={`rotate(${object.rotation} ${cx} ${cy})`}>
+      <g className="cursor-move" onPointerDown={onSelect} onDoubleClick={(event) => { if (device) { event.stopPropagation(); onOpenDevice(); } }}>
+        <ObjectGlyph object={object} active={active} tone={tone} device={device} selected={selected} />
+      </g>
+      {selected && <>
+        <rect x={object.x - 5} y={object.y - 5} width={object.width + 10} height={object.height + 10} fill="none" stroke="#22d3ee" strokeWidth="2" strokeDasharray="7 5" pointerEvents="none" />
+        {canResize && cornerHandles(object).map(({ key, x, y }) => <ResizeHandleCircle key={key} x={x} y={y} onPointerDown={(event) => { event.stopPropagation(); onResize(event, key); }} />)}
+      </>}
     </g>
   );
 }
 
-function renderObjectBody(
-  obj: FloorPlanObject,
-  x: number,
-  y: number,
-  stroke: string,
-  deviceFill: string,
-  device?: Device,
-) {
-  const w = obj.width;
-  const h = obj.height;
-  const furnitureFill = "#52525b";
-  const wood = "#713f12";
-  const fixture = "#3f3f46";
+function ObjectGlyph({ object, active, tone, device, selected }: { object: FloorPlanObject; active: boolean; tone: string; device?: Device; selected: boolean }) {
+  const { x, y, width: w, height: h } = object;
+  const stroke = selected ? "#22d3ee" : "#a1a1aa";
+  const fill = tone === "active" ? "#064e3b" : tone === "error" ? "#450a0a" : "#27272a";
+  const common = { stroke, strokeWidth: 2, fill };
+  const type = object.object_type;
 
-  if (obj.object_type === "door")
-    return (
-      <>
-        <line x1={x} y1={y + h / 2} x2={x + w} y2={y + h / 2} stroke="#a16207" strokeWidth={Math.max(5, h)} />
-        <path d={`M ${x} ${y + h / 2} A ${w} ${w} 0 0 1 ${x + w} ${y - w + h / 2}`} fill="none" stroke="#d97706" strokeWidth="2" />
-      </>
-    );
-  if (obj.object_type === "window")
-    return (
-      <>
-        <rect x={x} y={y} width={w} height={h} fill="#0e7490" stroke={stroke} />
-        <line x1={x} y1={y + h / 2} x2={x + w} y2={y + h / 2} stroke="#67e8f9" strokeWidth="2" />
-        <line x1={x + w / 2} y1={y} x2={x + w / 2} y2={y + h} stroke="#67e8f9" strokeWidth="2" />
-      </>
-    );
-  if (obj.object_type === "stairs")
-    return (
-      <>
-        <rect x={x} y={y} width={w} height={h} fill="#27272a" stroke={stroke} />
-        {Array.from({ length: 8 }).map((_, index) => (
-          <line key={index} x1={x} y1={y + ((index + 1) * h) / 9} x2={x + w} y2={y + ((index + 1) * h) / 9} stroke="#71717a" />
-        ))}
-        <path d={`M ${x + w / 2} ${y + h - 10} L ${x + w / 2} ${y + 15}`} stroke="#d4d4d8" strokeWidth="2" />
-      </>
-    );
-  if (obj.object_type === "column")
-    return <ellipse cx={x + w / 2} cy={y + h / 2} rx={w / 2} ry={h / 2} fill="#71717a" stroke={stroke} />;
-  if (obj.object_type === "radiator")
-    return (
-      <>
-        <rect x={x} y={y} width={w} height={h} rx="3" fill={fixture} stroke={stroke} />
-        {Array.from({ length: 6 }).map((_, index) => (
-          <line key={index} x1={x + ((index + 1) * w) / 7} y1={y + 3} x2={x + ((index + 1) * w) / 7} y2={y + h - 3} stroke="#a1a1aa" />
-        ))}
-      </>
-    );
-  if (obj.object_type === "fireplace")
-    return (
-      <>
-        <rect x={x} y={y} width={w} height={h} fill="#44403c" stroke={stroke} />
-        <path d={`M ${x + 15} ${y + h} V ${y + 10} H ${x + w - 15} V ${y + h}`} fill="none" stroke="#a8a29e" strokeWidth="5" />
-      </>
-    );
-  if (obj.object_type === "sofa" || obj.object_type === "armchair")
-    return (
-      <>
-        <rect x={x} y={y} rx="12" width={w} height={h} fill={furnitureFill} stroke={stroke} />
-        <rect x={x + 8} y={y + 8} rx="8" width={w - 16} height={Math.max(15, h / 2)} fill="#71717a" />
-        <rect x={x + 5} y={y + 8} rx="5" width="10" height={h - 16} fill="#3f3f46" />
-        <rect x={x + w - 15} y={y + 8} rx="5" width="10" height={h - 16} fill="#3f3f46" />
-      </>
-    );
-  if (obj.object_type === "bed")
-    return (
-      <>
-        <rect x={x} y={y} rx="8" width={w} height={h} fill="#3f3f46" stroke={stroke} strokeWidth="2" />
-        <rect x={x + 7} y={y + 8} rx="7" width={w - 14} height={h - 16} fill="#71717a" />
-        <rect x={x + 12} y={y + 14} rx="8" width={w / 2 - 17} height={Math.min(42, h / 4)} fill="#d4d4d8" />
-        <rect x={x + w / 2 + 5} y={y + 14} rx="8" width={w / 2 - 17} height={Math.min(42, h / 4)} fill="#d4d4d8" />
-      </>
-    );
-  if (obj.object_type === "toilet")
-    return (
-      <>
-        <rect x={x + w * 0.2} y={y} width={w * 0.6} height={h * 0.3} rx="4" fill="#e4e4e7" stroke={stroke} />
-        <ellipse cx={x + w / 2} cy={y + h * 0.62} rx={w * 0.38} ry={h * 0.34} fill="#e4e4e7" stroke={stroke} />
-        <ellipse cx={x + w / 2} cy={y + h * 0.62} rx={w * 0.2} ry={h * 0.18} fill="#0e7490" />
-      </>
-    );
-  if (obj.object_type === "bath")
-    return (
-      <>
-        <rect x={x} y={y} rx={h / 3} width={w} height={h} fill="#e4e4e7" stroke={stroke} />
-        <rect x={x + 8} y={y + 8} rx={h / 3} width={w - 16} height={h - 16} fill="#164e63" />
-      </>
-    );
-  if (obj.object_type === "shower")
-    return (
-      <>
-        <rect x={x} y={y} width={w} height={h} fill="#164e6333" stroke={stroke} />
-        <line x1={x} y1={y} x2={x + w} y2={y + h} stroke="#67e8f9" />
-        <circle cx={x + w * 0.75} cy={y + h * 0.25} r="6" fill="#a1a1aa" />
-      </>
-    );
-  if (obj.object_type === "sink")
-    return (
-      <>
-        <rect x={x} y={y} rx="8" width={w} height={h} fill="#e4e4e7" stroke={stroke} />
-        <ellipse cx={x + w / 2} cy={y + h / 2} rx={w * 0.32} ry={h * 0.28} fill="#164e63" />
-        <circle cx={x + w / 2} cy={y + h / 2} r="3" fill="#a1a1aa" />
-      </>
-    );
-  if (obj.object_type === "dining_chair" || obj.object_type === "office_chair")
-    return (
-      <>
-        <rect x={x + 5} y={y + h * 0.25} rx="5" width={w - 10} height={h * 0.65} fill={furnitureFill} stroke={stroke} />
-        <line x1={x + 7} y1={y + h * 0.25} x2={x + w - 7} y2={y + h * 0.25} stroke="#a1a1aa" strokeWidth="5" />
-      </>
-    );
-  if (obj.object_type === "rug")
-    return <rect x={x} y={y} rx="12" width={w} height={h} fill="#3f3f4655" stroke={selectedStroke(stroke)} strokeDasharray="8 5" />;
-  if (obj.object_type === "plant")
-    return (
-      <>
-        <circle cx={x + w / 2} cy={y + h / 2} r={Math.min(w, h) * 0.38} fill="#14532d" stroke={stroke} />
-        <path d={`M ${x + w / 2} ${y + h / 2} l -10 -12 M ${x + w / 2} ${y + h / 2} l 12 -10 M ${x + w / 2} ${y + h / 2} l 8 13`} stroke="#4ade80" strokeWidth="3" />
-      </>
-    );
-  if (obj.object_type === "lamp")
-    return (
-      <>
-        <circle cx={x + w / 2} cy={y + h / 2} r={Math.min(w, h) * 0.35} fill="#facc15aa" stroke={stroke} />
-        <circle cx={x + w / 2} cy={y + h / 2} r="4" fill="#fef08a" />
-      </>
-    );
-  if (obj.object_type === "label")
-    return <text x={x} y={y + 24} fill="#d4d4d8" stroke={stroke === "#22d3ee" ? stroke : "none"}>{obj.properties?.label || "Label"}</text>;
-  if (obj.object_type === "device")
-    return (
-      <>
-        <rect
-          x={x}
-          y={y}
-          rx="18"
-          width={w}
-          height={h}
-          fill={deviceFill}
-          stroke={device && deviceIsActive(device) ? "#34d399" : stroke}
-          strokeWidth="3"
-        />
-        <text x={x + w / 2} y={y + h / 2 - 4} textAnchor="middle" fill="white" fontSize="12">
-          {device?.name?.slice(0, 12) || "Device"}
-        </text>
-        <text x={x + w / 2} y={y + h / 2 + 14} textAnchor="middle" fill="#d4d4d8" fontSize="9">
-          {String(device?.state?.status || device?.status || "")}
-        </text>
-      </>
-    );
-
-  const label = humanise(obj.object_type);
-  return (
-    <>
-      <rect x={x} y={y} rx="6" width={w} height={h} fill={isWoodObject(obj.object_type) ? wood : furnitureFill} stroke={stroke} />
-      {obj.object_type === "kitchen_counter" && <line x1={x} y1={y + h * 0.2} x2={x + w} y2={y + h * 0.2} stroke="#a8a29e" />}
-      {obj.object_type === "bookshelf" && Array.from({ length: 4 }).map((_, index) => <line key={index} x1={x + ((index + 1) * w) / 5} y1={y + 4} x2={x + ((index + 1) * w) / 5} y2={y + h - 4} stroke="#a16207" />)}
-      <text x={x + w / 2} y={y + h / 2 + 4} textAnchor="middle" fill="#d4d4d8" fontSize={Math.min(11, Math.max(7, w / 12))}>
-        {label}
-      </text>
-    </>
-  );
+  if (type === "door") return <><line x1={x} y1={y + h / 2} x2={x + w} y2={y + h / 2} stroke="#d4d4d8" strokeWidth="5" /><path d={`M ${x} ${y + h / 2} A ${w} ${w} 0 0 1 ${x + w} ${y + h / 2 - w}`} fill="none" stroke="#71717a" strokeWidth="2" /></>;
+  if (type === "window") return <><line x1={x} y1={y + h / 2 - 3} x2={x + w} y2={y + h / 2 - 3} stroke="#67e8f9" strokeWidth="3" /><line x1={x} y1={y + h / 2 + 3} x2={x + w} y2={y + h / 2 + 3} stroke="#67e8f9" strokeWidth="3" /></>;
+  if (type === "stairs") return <><rect x={x} y={y} width={w} height={h} {...common} />{Array.from({ length: 8 }).map((_, index) => <line key={index} x1={x} y1={y + (h / 8) * index} x2={x + w} y2={y + (h / 8) * index} stroke="#71717a" strokeWidth="1.5" />)}<path d={`M ${x + w / 2} ${y + h - 12} L ${x + w / 2} ${y + 14}`} stroke="#22d3ee" strokeWidth="2" markerEnd="url(#arrow)" /></>;
+  if (type === "rug") return <rect x={x} y={y} width={w} height={h} rx="8" fill="#3f3f46" stroke="#52525b" strokeWidth="2" strokeDasharray="5 4" />;
+  if (type === "plant") return <><circle cx={x + w / 2} cy={y + h / 2} r={Math.min(w, h) / 2 - 2} fill="#14532d" stroke="#4ade80" strokeWidth="2" /><path d={`M ${x + w / 2} ${y + h * .2} L ${x + w / 2} ${y + h * .8} M ${x + w * .25} ${y + h * .45} L ${x + w * .75} ${y + h * .55}`} stroke="#86efac" strokeWidth="2" /></>;
+  if (type === "lamp") return <><circle cx={x + w / 2} cy={y + h / 2} r={Math.min(w, h) / 2 - 2} fill="#713f12" stroke="#facc15" strokeWidth="2" /><circle cx={x + w / 2} cy={y + h / 2} r="5" fill="#fde047" /></>;
+  if (type === "bed") return <><rect x={x} y={y} width={w} height={h} rx="8" {...common} /><rect x={x + 8} y={y + 8} width={w - 16} height={Math.min(42, h * .25)} rx="6" fill="#52525b" /><line x1={x + w / 2} y1={y + 8} x2={x + w / 2} y2={y + Math.min(50, h * .3)} stroke="#71717a" /></>;
+  if (type === "sofa" || type === "armchair") return <><rect x={x} y={y} width={w} height={h} rx="12" {...common} /><rect x={x + 7} y={y + 8} width={w - 14} height={Math.max(10, h * .27)} rx="7" fill="#52525b" /><line x1={x + w * .2} y1={y + h * .4} x2={x + w * .2} y2={y + h * .9} stroke="#71717a" /><line x1={x + w * .8} y1={y + h * .4} x2={x + w * .8} y2={y + h * .9} stroke="#71717a" /></>;
+  if (["dining_table", "coffee_table", "side_table", "patio_table"].includes(type)) return <rect x={x} y={y} width={w} height={h} rx={type === "dining_table" ? 8 : 14} {...common} />;
+  if (["dining_chair", "office_chair", "garden_chair"].includes(type)) return <><rect x={x + 5} y={y + 5} width={w - 10} height={h - 10} rx="7" {...common} /><line x1={x + 5} y1={y + 7} x2={x + w - 5} y2={y + 7} stroke="#71717a" strokeWidth="4" /></>;
+  if (type === "toilet") return <><ellipse cx={x + w / 2} cy={y + h * .58} rx={w * .34} ry={h * .32} {...common} /><rect x={x + w * .2} y={y} width={w * .6} height={h * .27} rx="5" {...common} /></>;
+  if (type === "bath") return <><rect x={x} y={y} width={w} height={h} rx={h / 2} {...common} /><rect x={x + 9} y={y + 9} width={w - 18} height={h - 18} rx={(h - 18) / 2} fill="#164e63" stroke="#67e8f9" /></>;
+  if (type === "shower") return <><rect x={x} y={y} width={w} height={h} {...common} /><circle cx={x + w / 2} cy={y + h / 2} r="8" fill="#164e63" stroke="#67e8f9" /><path d={`M ${x + 8} ${y + 8} L ${x + w - 8} ${y + h - 8} M ${x + w - 8} ${y + 8} L ${x + 8} ${y + h - 8}`} stroke="#52525b" /></>;
+  if (type === "sink" || type === "vanity") return <><rect x={x} y={y} width={w} height={h} rx="5" {...common} /><ellipse cx={x + w / 2} cy={y + h / 2} rx={w * .3} ry={h * .25} fill="#164e63" stroke="#67e8f9" /></>;
+  if (type === "hob") return <><rect x={x} y={y} width={w} height={h} {...common} />{[[.3,.3],[.7,.3],[.3,.7],[.7,.7]].map(([px,py], index) => <circle key={index} cx={x + w * px} cy={y + h * py} r={Math.min(w,h)*.12} fill="none" stroke="#71717a" strokeWidth="2" />)}</>;
+  if (["oven", "fridge", "freezer", "dishwasher", "washing_machine", "dryer", "microwave", "boiler", "appliance"].includes(type)) return <><rect x={x} y={y} width={w} height={h} rx="5" {...common} />{(type === "washing_machine" || type === "dryer") && <circle cx={x + w / 2} cy={y + h * .55} r={Math.min(w,h)*.27} fill="#18181b" stroke="#71717a" strokeWidth="3" />}<text x={x + w / 2} y={y + 14} fill="#a1a1aa" fontSize="9" textAnchor="middle">{shortLabel(type)}</text></>;
+  if (["wardrobe", "chest_drawers", "bedside_table", "dresser", "bookshelf", "cabinet", "storage_unit", "kitchen_counter", "kitchen_island", "desk", "tv_stand"].includes(type)) return <><rect x={x} y={y} width={w} height={h} rx="4" {...common} /><line x1={x + w / 2} y1={y + 4} x2={x + w / 2} y2={y + h - 4} stroke="#52525b" /></>;
+  if (type === "radiator") return <><rect x={x} y={y} width={w} height={h} rx="3" fill="#3f3f46" stroke={stroke} strokeWidth="2" />{Array.from({ length: 7 }).map((_, index) => <line key={index} x1={x + (w / 8) * (index + 1)} y1={y + 3} x2={x + (w / 8) * (index + 1)} y2={y + h - 3} stroke="#71717a" />)}</>;
+  if (type === "fireplace") return <><rect x={x} y={y} width={w} height={h} {...common} /><path d={`M ${x + w * .35} ${y + h * .8} Q ${x + w * .5} ${y + h * .15} ${x + w * .65} ${y + h * .8}`} fill="#7c2d12" stroke="#fb923c" /></>;
+  if (type === "barbecue") return <><rect x={x} y={y + h * .25} width={w} height={h * .55} rx="8" {...common} /><line x1={x + w * .2} y1={y + h * .8} x2={x + w * .15} y2={y + h} stroke="#71717a" strokeWidth="3" /><line x1={x + w * .8} y1={y + h * .8} x2={x + w * .85} y2={y + h} stroke="#71717a" strokeWidth="3" /></>;
+  if (type === "column") return <rect x={x} y={y} width={w} height={h} rx="3" fill="#52525b" stroke={stroke} strokeWidth="3" />;
+  if (type === "label") return <text x={x} y={y + h * .7} fill="#d4d4d8" fontSize={Math.max(12, h * .55)}>{String(object.properties?.label || "Label")}</text>;
+  if (type === "device") return <><rect x={x} y={y} width={w} height={h} rx="16" fill={active ? "#064e3b" : "#27272a"} stroke={active ? "#34d399" : stroke} strokeWidth="3" /><circle cx={x + w - 10} cy={y + 10} r="4" fill={active ? "#34d399" : "#71717a"} /><text x={x + w / 2} y={y + h / 2 - 2} textAnchor="middle" fill="#f4f4f5" fontSize="10">{device?.name || "Device"}</text><text x={x + w / 2} y={y + h / 2 + 13} textAnchor="middle" fill="#71717a" fontSize="8">{device?.device_type || "smart"}</text></>;
+  return <><rect x={x} y={y} width={w} height={h} rx="5" {...common} /><text x={x + w / 2} y={y + h / 2 + 4} textAnchor="middle" fill="#a1a1aa" fontSize="10">{shortLabel(type)}</text></>;
 }
 
-function selectedStroke(stroke: string) {
-  return stroke === "#22d3ee" ? "#22d3ee" : "#71717a";
+function RoomInspector({ room, onChange, onDuplicate, onDelete }: { room: Room; onChange: (changes: Partial<Room>) => void; onDuplicate: () => void; onDelete: () => void }) {
+  return <div className="space-y-4">
+    <div><div className="text-[10px] uppercase tracking-[.2em] text-cyan-500">Room</div><input value={room.name} onChange={(event) => onChange({ name: event.target.value })} className="mt-2 w-full rounded-lg border border-zinc-700 bg-zinc-950 p-2 text-lg font-semibold" /></div>
+    <div className="rounded-xl bg-zinc-950 p-3 text-xs text-zinc-400">Drag any blue corner on the canvas to resize. The room will snap to neighbouring room edges and corners.</div>
+    <div className="grid grid-cols-2 gap-2"><NumberField label="Width" value={room.width} onChange={(value) => onChange({ width: value })} /><NumberField label="Height" value={room.height} onChange={(value) => onChange({ height: value })} /></div>
+    <div className="grid grid-cols-2 gap-2"><NumberField label="X" value={room.x} onChange={(value) => onChange({ x: value })} /><NumberField label="Y" value={room.y} onChange={(value) => onChange({ y: value })} /></div>
+    <NumberField label="Wall thickness" value={Number(room.properties?.wall_thickness || 14)} onChange={(value) => onChange({ properties: { ...room.properties, wall_thickness: value } })} />
+    <div className="flex gap-2"><button onClick={onDuplicate} className="flex-1 rounded-lg border border-zinc-700 px-3 py-2 text-sm">Duplicate</button><button onClick={onDelete} className="flex-1 rounded-lg border border-red-900 px-3 py-2 text-sm text-red-400">Delete</button></div>
+  </div>;
 }
 
-function isWoodObject(type: FloorPlanObjectType) {
-  return new Set<FloorPlanObjectType>([
-    "coffee_table",
-    "dining_table",
-    "desk",
-    "wardrobe",
-    "chest_drawers",
-    "bedside_table",
-    "bookshelf",
-    "cabinet",
-    "tv_stand",
-    "kitchen_counter",
-    "kitchen_island",
-  ]).has(type);
+function ObjectInspector({ object, device, onChange, onDuplicate, onDelete, onOpenDevice }: { object: FloorPlanObject; device?: Device; onChange: (changes: Partial<FloorPlanObject>) => void; onDuplicate: () => void; onDelete: () => void; onOpenDevice: () => void }) {
+  return <div className="space-y-4">
+    <div><div className="text-[10px] uppercase tracking-[.2em] text-cyan-500">{object.object_type.replaceAll("_", " ")}</div><div className="mt-1 text-lg font-semibold text-white">{device?.name || shortLabel(object.object_type)}</div></div>
+    {device && <button onClick={onOpenDevice} className="w-full rounded-lg bg-cyan-700 px-3 py-2 text-sm font-semibold">Open device controls</button>}
+    {object.object_type === "label" && <label className="block text-xs text-zinc-500">Text<input value={String(object.properties?.label || "")} onChange={(event) => onChange({ properties: { ...object.properties, label: event.target.value } })} className="mt-1 w-full rounded-lg border border-zinc-700 bg-zinc-950 p-2 text-sm text-white" /></label>}
+    {object.object_type !== "wall" && <div className="grid grid-cols-2 gap-2"><NumberField label="Width" value={object.width} onChange={(value) => onChange({ width: value })} /><NumberField label="Height" value={object.height} onChange={(value) => onChange({ height: value })} /></div>}
+    {object.object_type === "wall" && <div className="grid grid-cols-2 gap-2"><NumberField label="Length" value={object.width} onChange={(value) => onChange({ width: value })} /><NumberField label="Thickness" value={object.height} onChange={(value) => onChange({ height: value })} /></div>}
+    <div className="grid grid-cols-2 gap-2"><NumberField label="X" value={object.x} onChange={(value) => onChange({ x: value })} /><NumberField label="Y" value={object.y} onChange={(value) => onChange({ y: value })} /></div>
+    <NumberField label="Rotation" value={object.rotation} onChange={(value) => onChange({ rotation: value })} />
+    <div className="flex gap-2"><button onClick={onDuplicate} className="flex-1 rounded-lg border border-zinc-700 px-3 py-2 text-sm">Duplicate</button><button onClick={onDelete} className="flex-1 rounded-lg border border-red-900 px-3 py-2 text-sm text-red-400">Delete</button></div>
+  </div>;
 }
 
-function humanise(value: string) {
-  return value.replaceAll("_", " ").replace(/\b\w/g, (letter) => letter.toUpperCase());
+function NumberField({ label, value, onChange }: { label: string; value: number; onChange: (value: number) => void }) {
+  return <label className="block text-[10px] uppercase tracking-wide text-zinc-500">{label}<input type="number" value={Math.round(value * 10) / 10} onChange={(event) => onChange(Number(event.target.value))} className="mt-1 w-full rounded-lg border border-zinc-700 bg-zinc-950 p-2 text-sm text-white" /></label>;
 }
 
-function RoomInspector({
-  room,
-  onChange,
-  onSave,
-}: {
-  room: Room;
-  onChange: (changes: Partial<Room>) => void;
-  onSave: () => void;
-}) {
-  return (
-    <div className="space-y-4">
-      <div>
-        <h2 className="font-semibold">Room</h2>
-        <p className="mt-1 text-xs text-zinc-500">Drag the room or resize it from any selected corner.</p>
-      </div>
-      <label className="block text-xs text-zinc-500">
-        Name
-        <input
-          value={room.name}
-          onChange={(event) => onChange({ name: event.target.value })}
-          onBlur={onSave}
-          className="mt-1 w-full rounded-lg border border-zinc-700 bg-zinc-950 p-2 text-white"
-        />
-      </label>
-      <div className="grid grid-cols-2 gap-2">
-        {(["x", "y", "width", "height"] as const).map((key) => (
-          <label key={key} className="block text-xs capitalize text-zinc-500">
-            {key}
-            <input
-              type="number"
-              value={Math.round(room[key])}
-              onChange={(event) => onChange({ [key]: Number(event.target.value) })}
-              onBlur={onSave}
-              className="mt-1 w-full rounded-lg border border-zinc-700 bg-zinc-950 p-2 text-white"
-            />
-          </label>
-        ))}
-      </div>
-      <label className="block text-xs text-zinc-500">
-        Wall thickness
-        <input
-          type="number"
-          min="4"
-          max="30"
-          value={Number(room.properties?.wall_thickness || 12)}
-          onChange={(event) =>
-            onChange({ properties: { ...room.properties, wall_thickness: Number(event.target.value) } })
-          }
-          onBlur={onSave}
-          className="mt-1 w-full rounded-lg border border-zinc-700 bg-zinc-950 p-2 text-white"
-        />
-      </label>
-      <div className="rounded-lg border border-zinc-800 bg-zinc-950 p-3 text-xs text-zinc-500">
-        {Math.round(room.width)} × {Math.round(room.height)} canvas units
-      </div>
-    </div>
-  );
+function ResizeHandleCircle({ x, y, onPointerDown }: { x: number; y: number; onPointerDown: (event: ReactPointerEvent<SVGCircleElement>) => void }) {
+  return <circle cx={x} cy={y} r="9" fill="#22d3ee" stroke="#083344" strokeWidth="3" className="cursor-nwse-resize" onPointerDown={onPointerDown} />;
 }
 
-function ObjectInspector({
-  obj,
-  device,
-  onChange,
-  onSave,
-  onOpen,
-}: {
-  obj: FloorPlanObject;
-  device?: Device;
-  onChange: (changes: Partial<FloorPlanObject>) => void;
-  onSave: () => void;
-  onOpen: (device: Device) => void;
-}) {
-  const wall = obj.object_type === "wall";
-  return (
-    <div className="space-y-4">
-      <div>
-        <h2 className="font-semibold">{device?.name || humanise(obj.object_type)}</h2>
-        <p className="mt-1 text-xs text-zinc-500">
-          {wall ? "Drag either endpoint to change wall length and angle." : "Drag the object; selected corners resize it."}
-        </p>
-      </div>
-      {obj.object_type === "label" && (
-        <label className="block text-xs text-zinc-500">
-          Text
-          <input
-            value={String(obj.properties?.label || "")}
-            onChange={(event) => onChange({ properties: { ...obj.properties, label: event.target.value } })}
-            onBlur={onSave}
-            className="mt-1 w-full rounded-lg border border-zinc-700 bg-zinc-950 p-2 text-white"
-          />
-        </label>
-      )}
-      <div className="grid grid-cols-2 gap-2">
-        {(["x", "y", "width", "height", "rotation"] as const).map((key) => (
-          <label key={key} className="block text-xs capitalize text-zinc-500">
-            {wall && key === "width" ? "length" : wall && key === "height" ? "thickness" : key}
-            <input
-              type="number"
-              value={Math.round(obj[key] * 10) / 10}
-              onChange={(event) => onChange({ [key]: Number(event.target.value) })}
-              onBlur={onSave}
-              className="mt-1 w-full rounded-lg border border-zinc-700 bg-zinc-950 p-2 text-white"
-            />
-          </label>
-        ))}
-      </div>
-      {device && (
-        <button
-          onClick={() => onOpen(device)}
-          className="w-full rounded-lg bg-cyan-700 px-3 py-2 text-sm font-semibold text-white"
-        >
-          Open device controls
-        </button>
-      )}
-    </div>
-  );
+function DimensionLine({ x1, y1, x2, y2, label, vertical = false }: { x1: number; y1: number; x2: number; y2: number; label: string; vertical?: boolean }) {
+  const mx = (x1 + x2) / 2;
+  const my = (y1 + y2) / 2;
+  return <g pointerEvents="none"><line x1={x1} y1={y1} x2={x2} y2={y2} stroke="#22d3ee" strokeWidth="1.2" /><line x1={vertical ? x1 - 5 : x1} y1={vertical ? y1 : y1 - 5} x2={vertical ? x1 + 5 : x1} y2={vertical ? y1 : y1 + 5} stroke="#22d3ee" /><line x1={vertical ? x2 - 5 : x2} y1={vertical ? y2 : y2 - 5} x2={vertical ? x2 + 5 : x2} y2={vertical ? y2 : y2 + 5} stroke="#22d3ee" /><rect x={mx - 20} y={my - 9} width="40" height="18" rx="5" fill="#083344" /><text x={mx} y={my + 4} textAnchor="middle" fill="#67e8f9" fontSize="10">{label}</text></g>;
+}
+
+function ObjectLibraryIcon({ type }: { type: FloorPlanObjectType }) {
+  return <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg border border-zinc-800 bg-zinc-900 text-[9px] font-semibold uppercase text-cyan-300">{iconText(type)}</div>;
+}
+
+function cornerHandles(rect: { x: number; y: number; width: number; height: number }) {
+  return [
+    { key: "nw" as const, x: rect.x, y: rect.y },
+    { key: "ne" as const, x: rect.x + rect.width, y: rect.y },
+    { key: "se" as const, x: rect.x + rect.width, y: rect.y + rect.height },
+    { key: "sw" as const, x: rect.x, y: rect.y + rect.height },
+  ];
+}
+
+function roomFill(type: string) {
+  const fills: Record<string, string> = {
+    living: "#17212a",
+    kitchen: "#1f2320",
+    dining: "#211f1a",
+    bedroom: "#201c26",
+    bathroom: "#17242a",
+    hall: "#202020",
+    office: "#1a2027",
+    utility: "#22201c",
+  };
+  return fills[type] || "#1c1c1f";
+}
+
+function iconText(type: FloorPlanObjectType) {
+  const names: Partial<Record<FloorPlanObjectType, string>> = {
+    wall: "W", door: "DR", window: "WN", stairs: "ST", column: "CL", radiator: "RAD", fireplace: "FP", boiler: "BLR",
+    sofa: "SO", armchair: "AC", coffee_table: "CT", side_table: "ST", dining_table: "DT", dining_chair: "DC", tv_stand: "TV", bookshelf: "BK",
+    bed: "BED", wardrobe: "WR", chest_drawers: "CD", bedside_table: "BT", dresser: "DS",
+    kitchen_counter: "KC", kitchen_island: "KI", sink: "SNK", oven: "OV", hob: "HOB", fridge: "FR", freezer: "FZ", dishwasher: "DW", washing_machine: "WM", dryer: "TD", microwave: "MW",
+    toilet: "WC", bath: "BA", shower: "SH", vanity: "VN", desk: "DK", office_chair: "OC", cabinet: "CB", storage_unit: "SU", rug: "RG", plant: "PL", lamp: "LP", patio_table: "PT", garden_chair: "GC", barbecue: "BBQ", label: "TXT", device: "DEV", appliance: "APP",
+  };
+  return names[type] || type.slice(0, 3).toUpperCase();
+}
+
+function shortLabel(type: FloorPlanObjectType | string) {
+  return type.replaceAll("_", " ").replace(/\b\w/g, (value) => value.toUpperCase());
 }
