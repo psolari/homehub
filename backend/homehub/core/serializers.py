@@ -46,6 +46,7 @@ class FloorPlanObjectSerializer(serializers.ModelSerializer):
 
 
 class FloorPlanSerializer(serializers.ModelSerializer):
+    rooms = RoomSerializer(many=True, read_only=True)
     objects = FloorPlanObjectSerializer(
         source="floorplan_objects",
         many=True,
@@ -54,7 +55,7 @@ class FloorPlanSerializer(serializers.ModelSerializer):
 
     class Meta:
         model = FloorPlan
-        fields = ["id", "name", "description", "svg_data", "width", "height", "objects"]
+        fields = ["id", "name", "description", "svg_data", "width", "height", "rooms", "objects"]
 
 
 class DashboardCardSerializer(serializers.ModelSerializer):
