@@ -303,12 +303,17 @@ export default function FloorPlanPage() {
     return () => window.removeEventListener("keydown", keyDown);
   }, [selection, selectedRoom, selectedObject]);
 
-  const pointFromEvent = (event: ReactPointerEvent<SVGSVGElement>) => {
-    if (!plan) return { x: 0, y: 0 };
-    const rect = event.currentTarget.getBoundingClientRect();
+  const pointFromEvent = (event: ReactPointerEvent<SVGElement>) => {
+    const currentPlan = planRef.current;
+    if (!currentPlan) return { x: 0, y: 0 };
+    const svg = event.currentTarget instanceof SVGSVGElement
+      ? event.currentTarget
+      : event.currentTarget.ownerSVGElement;
+    if (!svg) return { x: 0, y: 0 };
+    const rect = svg.getBoundingClientRect();
     return {
-      x: ((event.clientX - rect.left) * plan.width) / rect.width,
-      y: ((event.clientY - rect.top) * plan.height) / rect.height,
+      x: ((event.clientX - rect.left) * currentPlan.width) / rect.width,
+      y: ((event.clientY - rect.top) * currentPlan.height) / rect.height,
     };
   };
 
@@ -568,7 +573,7 @@ export default function FloorPlanPage() {
                   selected={selection?.kind === "room" && selection.id === room.id}
                   onSelect={(event) => {
                     setSelection({ kind: "room", id: room.id });
-                    begin(event, { kind: "move-room", id: room.id, start: pointFromEvent(event as unknown as ReactPointerEvent<SVGSVGElement>), origin: room });
+                    begin(event, { kind: "move-room", id: room.id, start: pointFromEvent(event), origin: room });
                   }}
                   onResize={(event, handle) => {
                     setSelection({ kind: "room", id: room.id });
@@ -587,7 +592,7 @@ export default function FloorPlanPage() {
                     selected={selection?.kind === "object" && selection.id === object.id}
                     onSelect={(event) => {
                       setSelection({ kind: "object", id: object.id });
-                      begin(event, { kind: "move-object", id: object.id, start: pointFromEvent(event as unknown as ReactPointerEvent<SVGSVGElement>), origin: object });
+                      begin(event, { kind: "move-object", id: object.id, start: pointFromEvent(event), origin: object });
                     }}
                     onResize={(event, handle) => begin(event, { kind: "resize-object", id: object.id, handle, origin: object })}
                     onWallEnd={(event, end) => begin(event, { kind: "wall-end", id: object.id, end, origin: object })}
@@ -736,7 +741,7 @@ function ObjectGlyph({ object, active, tone, device, selected }: { object: Floor
 
   if (type === "door") return <><line x1={x} y1={y + h / 2} x2={x + w} y2={y + h / 2} stroke="#d4d4d8" strokeWidth="5" /><path d={`M ${x} ${y + h / 2} A ${w} ${w} 0 0 1 ${x + w} ${y + h / 2 - w}`} fill="none" stroke="#71717a" strokeWidth="2" /></>;
   if (type === "window") return <><line x1={x} y1={y + h / 2 - 3} x2={x + w} y2={y + h / 2 - 3} stroke="#67e8f9" strokeWidth="3" /><line x1={x} y1={y + h / 2 + 3} x2={x + w} y2={y + h / 2 + 3} stroke="#67e8f9" strokeWidth="3" /></>;
-  if (type === "stairs") return <><rect x={x} y={y} width={w} height={h} {...common} />{Array.from({ length: 8 }).map((_, index) => <line key={index} x1={x} y1={y + (h / 8) * index} x2={x + w} y2={y + (h / 8) * index} stroke="#71717a" strokeWidth="1.5" />)}<path d={`M ${x + w / 2} ${y + h - 12} L ${x + w / 2} ${y + 14}`} stroke="#22d3ee" strokeWidth="2" markerEnd="url(#arrow)" /></>;
+  if (type === "stairs") return <><rect x={x} y={y} width={w} height={h} {...common} />{Array.from({ length: 8 }).map((_, index) => <line key={index} x1={x} y1={y + (h / 8) * index} x2={x + w} y2={y + (h / 8) * index} stroke="#71717a" strokeWidth="1.5" />)}<path d={`M ${x + w / 2} ${y + h - 12} L ${x + w / 2} ${y + 14}`} stroke="#22d3ee" strokeWidth="2" /></>;
   if (type === "rug") return <rect x={x} y={y} width={w} height={h} rx="8" fill="#3f3f46" stroke="#52525b" strokeWidth="2" strokeDasharray="5 4" />;
   if (type === "plant") return <><circle cx={x + w / 2} cy={y + h / 2} r={Math.min(w, h) / 2 - 2} fill="#14532d" stroke="#4ade80" strokeWidth="2" /><path d={`M ${x + w / 2} ${y + h * .2} L ${x + w / 2} ${y + h * .8} M ${x + w * .25} ${y + h * .45} L ${x + w * .75} ${y + h * .55}`} stroke="#86efac" strokeWidth="2" /></>;
   if (type === "lamp") return <><circle cx={x + w / 2} cy={y + h / 2} r={Math.min(w, h) / 2 - 2} fill="#713f12" stroke="#facc15" strokeWidth="2" /><circle cx={x + w / 2} cy={y + h / 2} r="5" fill="#fde047" /></>;
