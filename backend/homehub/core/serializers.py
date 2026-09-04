@@ -178,6 +178,9 @@ class IntegrationAccountSerializer(serializers.ModelSerializer):
     def update(self, instance, validated_data):
         credentials = validated_data.pop("credentials", None)
         account = super().update(instance, validated_data)
-        if credentials is not None:
+        if credentials:
             set_credentials(account, credentials)
+            account.status = "disconnected"
+            account.error = ""
+            account.save(update_fields=["status", "error"])
         return account
