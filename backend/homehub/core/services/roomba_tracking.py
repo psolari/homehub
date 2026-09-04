@@ -191,6 +191,9 @@ class RoombaTrackingManager:
 
         def on_disconnect(_error) -> None:
             session.ready.clear()
+            with self._lock:
+                if self._sessions.get(device.id) is session:
+                    self._sessions.pop(device.id, None)
 
         client.register_on_message_callback(on_message)
         client.register_on_disconnect_callback(on_disconnect)
