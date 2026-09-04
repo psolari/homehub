@@ -56,11 +56,79 @@ class RingCameraDriver(BaseDriver):
         "test_connection": True,
         "advanced_fields": ["family"],
     }
-    controls = [
-        Control("lights", "Lights", type="toggle", group="security", state_key="lights", parameter="value", icon="light"),
-        Control("siren", "Siren", type="toggle", group="security", state_key="siren", parameter="value", icon="siren"),
-        Control("snapshot", "Refresh camera", group="camera"),
-    ]
+    snapshot_control = Control(
+        "snapshot",
+        "Refresh camera",
+        group="camera",
+        icon="camera",
+    )
+    lights_control = Control(
+        "lights",
+        "Lights",
+        type="toggle",
+        group="security",
+        state_key="lights",
+        parameter="value",
+        icon="light",
+    )
+    siren_control = Control(
+        "siren",
+        "Siren",
+        type="toggle",
+        group="security",
+        state_key="siren",
+        parameter="value",
+        icon="siren",
+    )
+
+    # Snapshot is the only universal Ring camera/doorbell control. Lights and
+    # siren are hardware capabilities on some cameras (for example selected
+    # Spotlight/Floodlight models), not generic Ring controls.
+    controls = [snapshot_control]
+
+    def capabilities(self) -> dict:
+        discovery = self.device.discovery_data or {}
+        state = self.device.state or {}
+        family = str(
+            self.config.get("family")
+            or discovery.get("family")
+            or state.get("family")
+            or ""
+        )
+
+        advertised = discovery.get("ring_capabilities")
+        advertised_set = {
+            str(value).casefold()
+            for value in advertised
+        } if isinstance(advertised, list) else set()
+
+        supports_lights = (
+            state.get("supports_lights") is True
+            or "light" in advertised_set
+        )
+        supports_siren = (
+            state.get("supports_siren") is True
+            or "siren" in advertised_set
+        )
+
+        # Doorbells do not expose the generic camera light/siren controls in
+        # python-ring-doorbell. Be explicitly conservative for existing
+        # configured devices created before capability metadata was persisted.
+        if family in {"doorbots", "authorized_doorbots", "doorbells"}:
+            supports_lights = False
+            supports_siren = False
+
+        controls = [self.snapshot_control]
+        if supports_lights:
+            controls.append(self.lights_control)
+        if supports_siren:
+            controls.append(self.siren_control)
+
+        return {
+            "driver": self.driver_key,
+            "device_type": self.device_type,
+            "controls": [control.as_dict() for control in controls],
+        }
 
     async def _ring(self):
         account = await self.to_thread(
@@ -96,17 +164,42 @@ class RingCameraDriver(BaseDriver):
     async def get_state(self):
         device, family, ring = await self._device()
         try:
-            return {
+            capability = getattr(device, "has_capability", None)
+
+            def supports(name: str) -> bool:
+                if not capability:
+                    return False
+                try:
+                    return bool(capability(name))
+                except Exception:
+                    return False
+
+            supports_lights = supports("light")
+            supports_siren = supports("siren")
+            supports_video = supports("video") or family in {
+                "doorbells",
+                "doorbots",
+                "authorized_doorbots",
+                "stickup_cams",
+                "cameras",
+            }
+
+            state = {
                 "online": True,
                 "status": "on",
                 "power": "on",
                 "family": family,
                 "battery": self._attr(device, "battery_life"),
                 "wifi_signal": self._attr(device, "wifi_signal_strength"),
-                "lights": self._attr(device, "lights"),
-                "siren": self._attr(device, "siren"),
-                "camera_available": family in {"doorbells", "doorbots", "stickup_cams", "cameras"},
+                "camera_available": supports_video,
+                "supports_lights": supports_lights,
+                "supports_siren": supports_siren,
             }
+            if supports_lights:
+                state["lights"] = self._attr(device, "lights")
+            if supports_siren:
+                state["siren"] = self._attr(device, "siren")
+            return state
         finally:
             await close_ring_session(ring)
 
