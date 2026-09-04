@@ -14,13 +14,24 @@ export type ControlDescriptor = {
   placeholder?: string;
 };
 
+export type DashboardGroup = {
+  id: number;
+  name: string;
+  order: number;
+};
+
 export type DashboardCard = {
   id: number;
   device: number;
+  group?: number | null;
   enabled: boolean;
   size: "small" | "medium" | "large";
   order: number;
   visible_controls: string[];
+  grid_x: number;
+  grid_y: number;
+  grid_w: number;
+  grid_h: number;
 };
 
 export type Device = {
