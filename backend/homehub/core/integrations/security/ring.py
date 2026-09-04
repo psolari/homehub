@@ -5,6 +5,11 @@ from homehub.core.services.accounts import (
     get_active_account,
     set_account_credentials,
 )
+from homehub.core.services.ring_client import (
+    open_ring_session,
+    ring_device_groups,
+    ring_device_identity,
+)
 
 
 @register_driver
@@ -56,43 +61,23 @@ class RingCameraDriver(BaseDriver):
     ]
 
     async def _ring(self):
-        from ring_doorbell import Auth, Ring
-        from ring_doorbell.exceptions import Requires2FAError
-
-        account = get_active_account("ring", account_id=self.config.get("account_id"))
-        credentials = get_account_credentials(account)
-
-        def token_updated(token):
-            credentials["token"] = token
-            set_account_credentials(account, credentials)
-
-        auth = Auth("HomeHub/1.0", credentials.get("token"), token_updated)
-        try:
-            if not credentials.get("token"):
-                await auth.async_fetch_token(
-                    credentials.get("username", ""),
-                    credentials.get("password", ""),
-                    credentials.get("otp"),
-                )
-        except Requires2FAError as exc:
-            raise TwoFactorRequired("Ring requires a one-time authentication code") from exc
-        ring = Ring(auth)
-        if hasattr(ring, "async_create_session"):
-            await ring.async_create_session()
-        if hasattr(ring, "async_update_data"):
-            await ring.async_update_data()
+        account = await self.to_thread(
+            get_active_account,
+            "ring",
+            self.config.get("account_id"),
+        )
+        credentials = await self.to_thread(get_account_credentials, account)
+        ring, token = await open_ring_session(credentials)
+        if token:
+            await self.to_thread(set_account_credentials, account, {"token": token})
         return ring
 
     async def _device(self):
         ring = await self._ring()
-        devices = ring.devices()
-        devices = await devices if hasattr(devices, "__await__") else devices
-        wanted = str(self.config.get("ring_device_id"))
-        for family, values in (devices.items() if isinstance(devices, dict) else []):
-            for device in values or []:
-                identity = str(
-                    getattr(device, "device_id", getattr(device, "id", getattr(device, "account_id", "")))
-                )
+        wanted = str(self.config.get("ring_device_id") or "")
+        for family, values in ring_device_groups(ring).items():
+            for device in values:
+                identity = ring_device_identity(device)
                 if identity == wanted or str(getattr(device, "name", "")) == wanted:
                     return device, family
         raise IntegrationError("Ring device was not found")
