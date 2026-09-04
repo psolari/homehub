@@ -30,7 +30,7 @@ from homehub.core.serializers import (
     RoomSerializer,
     UserSerializer,
 )
-from homehub.core.services.accounts import get_credentials
+from homehub.core.services.accounts import get_active_account, get_credentials
 from homehub.core.services.device_config import get_device_credentials
 from homehub.core.services.integration_accounts import validate_integration_account
 from homehub.core.services.devices import (
@@ -284,6 +284,246 @@ class ProviderCatalogView(APIView):
         return Response(PROVIDER_SCHEMAS)
 
 
+class SpotifyPlayerViewSet(viewsets.ViewSet):
+    permission_classes = [AllowAny]
+
+    @staticmethod
+    def _account():
+        return get_active_account("spotify")
+
+    @staticmethod
+    def _normalise_name(value):
+        return "".join(character for character in str(value or "").casefold() if character.isalnum())
+
+    def _service(self):
+        account = self._account()
+        if account.status != "connected":
+            raise RuntimeError("Spotify is not connected. Configure Spotify in Integrations first.")
+        service = SpotifyService(account)
+        missing = service.missing_scopes()
+        if missing:
+            raise RuntimeError(
+                "Spotify needs to be re-authorised for the player. Missing permissions: "
+                + ", ".join(missing)
+            )
+        return service
+
+    def _outputs(self, service):
+        spotify_devices = service.devices()
+        homehub_speakers = list(Device.objects.filter(device_type="speaker").order_by("name"))
+        matched_homehub: set[int] = set()
+        outputs = []
+
+        for item in spotify_devices:
+            spotify_name = str(item.get("name") or "Spotify device")
+            spotify_id = item.get("id")
+            matched = None
+            for speaker in homehub_speakers:
+                config = speaker.config or {}
+                configured_id = str(config.get("spotify_device_id") or "")
+                configured_name = str(
+                    config.get("spotify_device_name")
+                    or speaker.name
+                    or ""
+                )
+                if configured_id and spotify_id and configured_id == str(spotify_id):
+                    matched = speaker
+                    break
+                if self._normalise_name(configured_name) == self._normalise_name(spotify_name):
+                    matched = speaker
+                    break
+
+            if matched:
+                matched_homehub.add(matched.id)
+
+            outputs.append(
+                {
+                    "spotify_device_id": spotify_id,
+                    "name": spotify_name,
+                    "type": item.get("type"),
+                    "is_active": bool(item.get("is_active")),
+                    "is_restricted": bool(item.get("is_restricted")),
+                    "volume_percent": item.get("volume_percent"),
+                    "supports_volume": bool(item.get("supports_volume")),
+                    "available": bool(spotify_id) and not bool(item.get("is_restricted")),
+                    "homehub_device_id": matched.id if matched else None,
+                    "homehub_name": matched.name if matched else None,
+                    "homehub_model": matched.model if matched else None,
+                }
+            )
+
+        for speaker in homehub_speakers:
+            if speaker.id in matched_homehub:
+                continue
+            outputs.append(
+                {
+                    "spotify_device_id": None,
+                    "name": speaker.name,
+                    "type": "speaker",
+                    "is_active": False,
+                    "is_restricted": False,
+                    "volume_percent": speaker.state.get("volume") if speaker.state else None,
+                    "supports_volume": False,
+                    "available": False,
+                    "homehub_device_id": speaker.id,
+                    "homehub_name": speaker.name,
+                    "homehub_model": speaker.model,
+                    "unavailable_reason": "This HomeHub speaker is not currently exposed by Spotify Connect.",
+                }
+            )
+
+        return outputs
+
+    @action(detail=False, methods=["get"])
+    def home(self, request):
+        try:
+            service = self._service()
+            data = service.home()
+            data["outputs"] = self._outputs(service)
+            return Response(data)
+        except Exception as exc:
+            return Response(
+                {"error": str(exc) or exc.__class__.__name__},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+    @action(detail=False, methods=["get"])
+    def playback(self, request):
+        try:
+            service = self._service()
+            return Response(
+                {
+                    "playback": service.playback(),
+                    "queue": service.queue(),
+                    "outputs": self._outputs(service),
+                }
+            )
+        except Exception as exc:
+            return Response(
+                {"error": str(exc) or exc.__class__.__name__},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+    @action(detail=False, methods=["get"])
+    def search(self, request):
+        query = str(request.query_params.get("q") or "").strip()
+        if not query:
+            return Response(
+                {
+                    "tracks": [],
+                    "albums": [],
+                    "playlists": [],
+                    "shows": [],
+                    "episodes": [],
+                }
+            )
+        try:
+            return Response(self._service().search_grouped(query))
+        except Exception as exc:
+            return Response(
+                {"error": str(exc) or exc.__class__.__name__},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+    @action(detail=False, methods=["get"], url_path="show-episodes")
+    def show_episodes(self, request):
+        show_id = str(request.query_params.get("show_id") or "").strip()
+        if not show_id:
+            return Response(
+                {"error": "show_id is required"},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        try:
+            return Response({"episodes": self._service().show_episodes(show_id)})
+        except Exception as exc:
+            return Response(
+                {"error": str(exc) or exc.__class__.__name__},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+    @action(detail=False, methods=["post"])
+    def play(self, request):
+        try:
+            service = self._service()
+            service.play(
+                request.data.get("uri"),
+                device_id=request.data.get("device_id"),
+            )
+            return Response({"playback": service.playback()})
+        except Exception as exc:
+            return Response(
+                {"error": str(exc) or exc.__class__.__name__},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+    @action(detail=False, methods=["post"])
+    def control(self, request):
+        action_name = str(request.data.get("action") or "")
+        device_id = request.data.get("device_id")
+        try:
+            service = self._service()
+            if action_name == "resume":
+                service.play(device_id=device_id)
+            elif action_name == "pause":
+                service.pause(device_id=device_id)
+            elif action_name == "next":
+                service.next(device_id=device_id)
+            elif action_name == "previous":
+                service.previous(device_id=device_id)
+            elif action_name == "shuffle":
+                service.set_shuffle(bool(request.data.get("value")), device_id=device_id)
+            elif action_name == "repeat":
+                service.set_repeat(str(request.data.get("value") or "off"), device_id=device_id)
+            elif action_name == "seek":
+                service.seek(int(request.data.get("position_ms") or 0), device_id=device_id)
+            elif action_name == "queue":
+                uri = str(request.data.get("uri") or "")
+                if not uri:
+                    raise RuntimeError("A Spotify URI is required to add an item to the queue.")
+                service.add_to_queue(uri, device_id=device_id)
+            else:
+                raise RuntimeError(f"Unknown Spotify player action: {action_name}")
+            return Response({"playback": service.playback(), "queue": service.queue()})
+        except Exception as exc:
+            return Response(
+                {"error": str(exc) or exc.__class__.__name__},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+    @action(detail=False, methods=["post"])
+    def transfer(self, request):
+        device_id = str(request.data.get("device_id") or "")
+        if not device_id:
+            return Response(
+                {"error": "device_id is required"},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        try:
+            service = self._service()
+            service.transfer(device_id, play=bool(request.data.get("play", True)))
+            return Response({"playback": service.playback(), "outputs": self._outputs(service)})
+        except Exception as exc:
+            return Response(
+                {"error": str(exc) or exc.__class__.__name__},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+    @action(detail=False, methods=["post"])
+    def volume(self, request):
+        try:
+            service = self._service()
+            service.set_volume(
+                int(request.data.get("value") or 0),
+                device_id=request.data.get("device_id"),
+            )
+            return Response({"playback": service.playback()})
+        except Exception as exc:
+            return Response(
+                {"error": str(exc) or exc.__class__.__name__},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+
 class IntegrationAccountViewSet(OpenViewSet):
     queryset = IntegrationAccount.objects.all()
     serializer_class = IntegrationAccountSerializer
@@ -294,13 +534,16 @@ class IntegrationAccountViewSet(OpenViewSet):
         try:
             if account.provider == "spotify":
                 credentials = get_credentials(account)
-                if credentials.get("token_info"):
-                    devices = SpotifyService(account).devices()
+                service = SpotifyService(account)
+                token_info = credentials.get("token_info")
+                if token_info and not service.missing_scopes():
+                    devices = service.devices()
                     account.status, account.error = "connected", ""
                     account.metadata = {
                         **(account.metadata or {}),
                         "verified_at": timezone.now().isoformat(),
                         "provider_devices_seen": len(devices or []),
+                        "spotify_scopes": sorted(service.token_scopes()),
                     }
                     account.save(update_fields=["status", "error", "metadata"])
                     data = self.get_serializer(account).data
@@ -310,11 +553,16 @@ class IntegrationAccountViewSet(OpenViewSet):
                     }
                     return Response(data)
 
-                url = SpotifyService(account).authorization_url(state=str(account.id))
+                url = service.authorization_url(state=str(account.id))
                 account.status, account.error = "needs_auth", ""
                 account.save(update_fields=["status", "error"])
                 data = self.get_serializer(account).data
                 data["authorization_url"] = url
+                if token_info:
+                    data["connection"] = {
+                        "message": "Spotify needs additional permissions for the full HomeHub player.",
+                        "missing_scopes": service.missing_scopes(),
+                    }
                 return Response(data)
 
             connection = validate_integration_account(account)
@@ -366,7 +614,7 @@ class IntegrationAccountViewSet(OpenViewSet):
         if not query:
             return Response([])
         try:
-            return Response(SpotifyService(self.get_object()).search(query))
+            return Response(SpotifyService(self.get_object()).search_grouped(query))
         except Exception as exc:
             return Response({"error": str(exc)}, status=status.HTTP_400_BAD_REQUEST)
 
