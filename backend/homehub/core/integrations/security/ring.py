@@ -1,5 +1,3 @@
-import asyncio
-
 from homehub.core.integrations.base import BaseDriver, Control, IntegrationError
 from homehub.core.integrations.registry import register_driver
 from homehub.core.services.accounts import (
@@ -12,6 +10,7 @@ from homehub.core.services.ring_client import (
     open_ring_session,
     ring_device_groups,
     ring_device_identity,
+    take_ring_snapshot,
 )
 
 
@@ -155,49 +154,17 @@ class RingCameraDriver(BaseDriver):
     async def camera_frame(self):
         device, _, ring = await self._device()
         try:
-            async_snapshot = getattr(device, "async_get_snapshot", None)
-            if async_snapshot:
-                try:
-                    try:
-                        # Ring first asks the doorbell/camera to generate a fresh
-                        # snapshot, then polls its snapshot timestamp until the
-                        # new image is ready. A battery device commonly needs
-                        # several seconds to wake; the previous 1.5s window was
-                        # much too short and caused valid cameras to return None.
-                        snapshot = async_snapshot(retries=10, delay=1)
-                    except TypeError:
-                        snapshot = async_snapshot()
-                    data = await asyncio.wait_for(snapshot, timeout=14)
-                except TimeoutError as exc:
-                    raise IntegrationError(
-                        "Ring did not produce a fresh snapshot within 14 seconds. "
-                        "The camera may still be waking up; wait a few seconds and try Refresh camera again."
-                    ) from exc
-                if isinstance(data, bytes) and data:
-                    return data, "image/jpeg"
-                raise IntegrationError(
-                    "Ring accepted the snapshot request but did not publish a fresh image "
-                    "within 10 seconds. Wait a few seconds and try Refresh camera again."
-                )
-
-            sync_snapshot = getattr(device, "get_snapshot", None)
-            if sync_snapshot:
-                try:
-                    # Older python-ring-doorbell versions only expose the deprecated
-                    # sync method. Calling it directly from this coroutine raises.
-                    data = await asyncio.wait_for(
-                        self.to_thread(sync_snapshot),
-                        timeout=15,
-                    )
-                except TimeoutError as exc:
-                    raise IntegrationError(
-                        "Ring snapshot timed out. The camera may be waking up; try Refresh camera again."
-                    ) from exc
-                if isinstance(data, bytes):
-                    return data, "image/jpeg"
-
-            raise IntegrationError(
-                "This installed Ring library does not expose a camera snapshot API."
+            data = await take_ring_snapshot(
+                ring,
+                device,
+                max_age=30,
+                max_wait=12,
             )
+            return data, "image/jpeg"
+        except Exception as exc:
+            if isinstance(exc, IntegrationError):
+                raise
+            raise IntegrationError(str(exc) or exc.__class__.__name__) from exc
         finally:
             await close_ring_session(ring)
+
