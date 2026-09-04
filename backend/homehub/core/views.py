@@ -302,10 +302,13 @@ class SpotifyPlayerViewSet(viewsets.ViewSet):
         service = SpotifyService(account)
         missing = service.missing_scopes()
         if missing:
-            raise RuntimeError(
-                "Spotify needs to be re-authorised for the player. Missing permissions: "
-                + ", ".join(missing)
+            account.status = "needs_auth"
+            account.error = (
+                "Spotify needs to be re-authorised for the full HomeHub player. "
+                "Missing permissions: " + ", ".join(missing)
             )
+            account.save(update_fields=["status", "error"])
+            raise RuntimeError(account.error)
         return service
 
     def _outputs(self, service):
