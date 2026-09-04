@@ -568,8 +568,21 @@ class IntegrationAccountViewSet(OpenViewSet):
                     }
                 return Response(data)
 
-            connection = validate_integration_account(account)
-            discovered = discover_account(account)
+            # Hive and Ring discovery already authenticates and opens the
+            # provider session. Re-running a separate validation first doubles
+            # cloud login/API work and can leave the UI waiting on two slow
+            # sessions. Use one discovery pass as both verification and discovery.
+            if account.provider in {"hive", "ring"}:
+                discovered = discover_account(account)
+                connection = {
+                    "message": f"{account.get_provider_display()} account authenticated successfully.",
+                    "provider_devices_seen": len(discovered),
+                    "verified_at": timezone.now().isoformat(),
+                }
+            else:
+                connection = validate_integration_account(account)
+                discovered = discover_account(account)
+
             account.status, account.error = "connected", ""
             account.metadata = {
                 **(account.metadata or {}),
