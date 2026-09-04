@@ -387,21 +387,30 @@ def _discover_ring_account(account) -> list[Candidate]:
     return run_async(discover())
 
 
-def discover_cloud_accounts() -> list[dict[str, Any]]:
-    from homehub.core.models import IntegrationAccount
-
+def discover_account(account) -> list[dict[str, Any]]:
     handlers = {
         "hive": _discover_hive_account,
         "alexa": _discover_alexa_account,
         "ring": _discover_ring_account,
     }
-    candidates: list[Candidate] = []
-    for account in IntegrationAccount.objects.filter(active=True):
-        handler = handlers.get(account.provider)
-        if handler:
-            candidates.extend(handler(account))
-    candidates = _dedupe_candidates(candidates)
-    return [candidate.as_dict() for candidate in candidates if not _is_already_configured(candidate)]
+    handler = handlers.get(account.provider)
+    if not handler:
+        return []
+    candidates = _dedupe_candidates(handler(account))
+    return [
+        candidate.as_dict()
+        for candidate in candidates
+        if not _is_already_configured(candidate)
+    ]
+
+
+def discover_cloud_accounts() -> list[dict[str, Any]]:
+    from homehub.core.models import IntegrationAccount
+
+    result: list[dict[str, Any]] = []
+    for account in IntegrationAccount.objects.filter(active=True, status="connected"):
+        result.extend(discover_account(account))
+    return result
 
 
 def discover_all(cidr: str | None = None, *, include_cloud: bool = True) -> dict[str, Any]:
