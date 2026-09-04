@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useState } from "react";
 import * as mdi from "@mdi/js";
 import Icon from "@mdi/react";
 import { useNavigate } from "react-router-dom";
@@ -168,9 +168,29 @@ export default function SpotifyPage() {
 
   useEffect(() => {
     if (!data) return;
-    const timer = window.setInterval(() => void refreshPlayback(), 4500);
+    const timer = window.setInterval(async () => {
+      try {
+        const next = await get<{
+          playback: SpotifyPlayback;
+          queue: SpotifyMedia[];
+          outputs: SpotifyOutput[];
+        }>("/spotify/playback/");
+        setData((current) =>
+          current
+            ? {
+                ...current,
+                playback: next.playback,
+                queue: next.queue,
+                outputs: next.outputs,
+              }
+            : current,
+        );
+      } catch {
+        // Keep the last known player state while Spotify/Connect is temporarily unavailable.
+      }
+    }, 4500);
     return () => window.clearInterval(timer);
-  }, [Boolean(data)]);
+  }, [data !== null]);
 
   const run = async (key: string, action: () => Promise<void>) => {
     setBusy(key);
