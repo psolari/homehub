@@ -110,6 +110,14 @@ def initialize_device(device: Device, *, raise_errors: bool = True) -> dict[str,
             state = {"online": True, "status": "unknown"}
         if state.get("online") is False:
             raise IntegrationError(str(state.get("error") or "Device connection test failed."))
+
+        # Some integrations (notably Ring) learn hardware capabilities from
+        # the live device state. Recompute capabilities from that fresh state
+        # before returning the device to the frontend.
+        driver.device.state = state
+        device.capabilities = driver.capabilities()
+        device.save(update_fields=["capabilities"])
+
         persist_state(device, state)
         return state
     except Exception as exc:
@@ -130,6 +138,9 @@ def refresh_device(device: Device, *, raise_errors: bool = False) -> dict[str, A
             state = run_async(driver.get_state())
         finally:
             _persist_driver_credentials(driver)
+        driver.device.state = state
+        device.capabilities = driver.capabilities()
+        device.save(update_fields=["capabilities"])
         persist_state(device, state)
         return state
     except Exception as exc:
