@@ -12,6 +12,7 @@ class HiveClientTests(SimpleTestCase):
     def test_current_pyhive_session_contract_is_used(self):
         auth_instance = SimpleNamespace(login=AsyncMock(return_value={"accessToken": "token"}))
         hive_instance = SimpleNamespace(
+            updateTokens=AsyncMock(),
             startSession=AsyncMock(),
             session=SimpleNamespace(
                 data=SimpleNamespace(devices={"heating-1": {"id": "heating-1"}})
@@ -44,6 +45,7 @@ class HiveClientTests(SimpleTestCase):
 
         self.assertIs(result, hive_instance)
         auth_instance.login.assert_awaited_once_with()
+        hive_instance.updateTokens.assert_awaited_once_with({"accessToken": "token"})
         hive_instance.startSession.assert_awaited_once_with(
             {"tokens": {"accessToken": "token"}}
         )
