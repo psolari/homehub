@@ -409,6 +409,8 @@ def discover_cloud_accounts() -> list[dict[str, Any]]:
 
     result: list[dict[str, Any]] = []
     for account in IntegrationAccount.objects.filter(active=True, status="connected"):
+        if not (account.metadata or {}).get("verified_at"):
+            continue
         result.extend(discover_account(account))
     return result
 
