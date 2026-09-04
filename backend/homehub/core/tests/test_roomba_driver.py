@@ -7,10 +7,12 @@ from homehub.core.models import Device
 
 
 class RoombaDriverTests(SimpleTestCase):
-    @patch("roombapy.roomba_factory.RoombaFactory.create_roomba")
-    def test_client_uses_roombapy_factory_api(self, create_roomba):
+    @patch(
+        "homehub.core.integrations.vacuum.roomba.roomba_tracking_manager.ensure"
+    )
+    def test_driver_reuses_persistent_tracking_client(self, ensure):
         sentinel = object()
-        create_roomba.return_value = sentinel
+        ensure.return_value = sentinel
         device = Device(
             name="Roomba",
             device_type="vacuum",
@@ -18,13 +20,9 @@ class RoombaDriverTests(SimpleTestCase):
             ip_address="192.168.1.31",
             config={"blid": "robot-blid", "password": "robot-password"},
         )
+        driver = RoombaDriver(device)
 
-        client = RoombaDriver(device)._client()
+        client = driver._tracked_client()
 
         self.assertIs(client, sentinel)
-        create_roomba.assert_called_once_with(
-            address="192.168.1.31",
-            blid="robot-blid",
-            password="robot-password",
-            continuous=True,
-        )
+        ensure.assert_called_once_with(device, driver.config)
