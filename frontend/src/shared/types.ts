@@ -40,6 +40,7 @@ export type Device = {
   status: string;
   config?: Record<string, unknown>;
   metadata?: Record<string, unknown>;
+  discovery_data?: Record<string, unknown>;
   capabilities?: { controls?: ControlDescriptor[]; driver?: string };
   state?: Record<string, any>;
   is_online?: boolean;
