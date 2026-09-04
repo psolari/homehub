@@ -248,11 +248,11 @@ class SpotifyService:
             limit=max(1, min(10, limit)),
         )
         mapping = {
-            "tracks": ("track", "track"),
-            "albums": ("album", "album"),
-            "playlists": ("playlist", "playlist"),
-            "shows": ("show", "show"),
-            "episodes": ("episode", "episode"),
+            "tracks": ("tracks", "track"),
+            "albums": ("albums", "album"),
+            "playlists": ("playlists", "playlist"),
+            "shows": ("shows", "show"),
+            "episodes": ("episodes", "episode"),
         }
         return {
             key: [
