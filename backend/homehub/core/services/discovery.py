@@ -236,46 +236,86 @@ def discover_network(cidr: str | None = None, *, max_hosts: int = 512) -> list[d
 def _discover_hive_account(account) -> list[Candidate]:
     from homehub.core.services.accounts import get_credentials
     from homehub.core.services.devices import run_async
+    from homehub.core.services.hive_client import hive_devices, open_hive_session
 
     async def discover():
-        try:
-            from apyhiveapi import Auth, Hive
-
-            credentials = get_credentials(account)
-            auth = Auth(credentials.get("username", ""), credentials.get("password", ""))
-            tokens = await auth.login()
-            hive = Hive(tokens)
-            await hive.startSession(tokens)
-            data = getattr(getattr(hive, "session", None), "data", None)
-            devices = getattr(data, "devices", data) or []
-            values = devices.values() if isinstance(devices, dict) else devices
-            result: list[Candidate] = []
-            for device in values:
-                if isinstance(device, dict):
-                    device_id = device.get("id") or device.get("device_id")
-                    name = device.get("name") or device.get("hiveType") or "Hive Heating"
-                    type_name = str(device.get("type") or device.get("hiveType") or "").lower()
-                else:
-                    device_id = getattr(device, "id", getattr(device, "device_id", None))
-                    name = getattr(device, "name", "Hive Heating")
-                    type_name = str(getattr(device, "type", getattr(device, "hiveType", ""))).lower()
-                if not device_id or not any(word in type_name for word in ("heat", "thermostat", "zone")):
-                    continue
-                result.append(
-                    Candidate(
-                        unique_id=f"hive:{device_id}",
-                        name=str(name),
-                        device_type="thermostat",
-                        model="hive_heating",
-                        manufacturer="Hive",
-                        source="cloud",
-                        config={"account_id": account.id, "hive_device_id": str(device_id)},
-                        discovery_data={"method": "hive_cloud"},
-                    )
+        credentials = get_credentials(account)
+        hive = await open_hive_session(credentials)
+        result: list[Candidate] = []
+        for device in hive_devices(hive):
+            if isinstance(device, dict):
+                device_id = (
+                    device.get("id")
+                    or device.get("device_id")
+                    or device.get("deviceId")
                 )
-            return result
-        except Exception:
-            return []
+                name = (
+                    device.get("name")
+                    or device.get("device_name")
+                    or device.get("hiveType")
+                    or "Hive Heating"
+                )
+                type_name = str(
+                    device.get("type")
+                    or device.get("device_type")
+                    or device.get("hiveType")
+                    or ""
+                ).lower()
+            else:
+                device_id = getattr(
+                    device,
+                    "id",
+                    getattr(
+                        device,
+                        "device_id",
+                        getattr(device, "deviceId", None),
+                    ),
+                )
+                name = getattr(
+                    device,
+                    "name",
+                    getattr(device, "device_name", "Hive Heating"),
+                )
+                type_name = str(
+                    getattr(
+                        device,
+                        "type",
+                        getattr(
+                            device,
+                            "device_type",
+                            getattr(device, "hiveType", ""),
+                        ),
+                    )
+                ).lower()
+
+            if not device_id:
+                continue
+
+            if not any(
+                word in type_name
+                for word in ("heat", "thermostat", "climate", "trv", "zone")
+            ):
+                continue
+
+            result.append(
+                Candidate(
+                    unique_id=f"hive:{device_id}",
+                    name=str(name),
+                    device_type="thermostat",
+                    model="hive_heating",
+                    manufacturer="Hive",
+                    source="cloud",
+                    config={
+                        "account_id": account.id,
+                        "hive_device_id": str(device_id),
+                    },
+                    discovery_data={
+                        "method": "hive_cloud",
+                        "hive_type": type_name,
+                    },
+                )
+            )
+        return result
 
     return run_async(discover())
 
