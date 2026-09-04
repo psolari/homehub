@@ -28,3 +28,18 @@ def get_active_account(provider: str, account_id: int | None = None) -> Integrat
 
 get_account_credentials = get_credentials
 set_account_credentials = set_credentials
+
+
+
+def delete_credentials(
+    account: IntegrationAccount,
+    *names: str,
+    save: bool = True,
+) -> dict[str, Any]:
+    current = get_credentials(account)
+    for name in names:
+        current.pop(name, None)
+    account.encrypted_credentials = encrypt_json(current) if current else ""
+    if save:
+        account.save(update_fields=["encrypted_credentials"])
+    return current
