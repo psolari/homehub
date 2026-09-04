@@ -159,17 +159,26 @@ class RingCameraDriver(BaseDriver):
             if async_snapshot:
                 try:
                     try:
-                        snapshot = async_snapshot(retries=2, delay=0.75)
+                        # Ring first asks the doorbell/camera to generate a fresh
+                        # snapshot, then polls its snapshot timestamp until the
+                        # new image is ready. A battery device commonly needs
+                        # several seconds to wake; the previous 1.5s window was
+                        # much too short and caused valid cameras to return None.
+                        snapshot = async_snapshot(retries=10, delay=1)
                     except TypeError:
                         snapshot = async_snapshot()
-                    data = await asyncio.wait_for(snapshot, timeout=15)
+                    data = await asyncio.wait_for(snapshot, timeout=14)
                 except TimeoutError as exc:
                     raise IntegrationError(
-                        "Ring snapshot timed out. The camera may be waking up; try Refresh camera again."
+                        "Ring did not produce a fresh snapshot within 14 seconds. "
+                        "The camera may still be waking up; wait a few seconds and try Refresh camera again."
                     ) from exc
-                if isinstance(data, bytes):
+                if isinstance(data, bytes) and data:
                     return data, "image/jpeg"
-                return None
+                raise IntegrationError(
+                    "Ring accepted the snapshot request but did not publish a fresh image "
+                    "within 10 seconds. Wait a few seconds and try Refresh camera again."
+                )
 
             sync_snapshot = getattr(device, "get_snapshot", None)
             if sync_snapshot:
