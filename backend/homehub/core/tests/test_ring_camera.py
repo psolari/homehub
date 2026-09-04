@@ -12,6 +12,8 @@ class RingCameraSnapshotTests(SimpleTestCase):
     def driver(self):
         device = SimpleNamespace(
             config={},
+            discovery_data={},
+            state={},
             encrypted_credentials=b"",
             name="Front Door",
         )
@@ -65,3 +67,66 @@ class RingCameraSnapshotTests(SimpleTestCase):
             "server-side timeout",
         ):
             asyncio.run(driver.camera_frame())
+
+
+
+class RingCameraCapabilityTests(SimpleTestCase):
+    def driver(
+        self,
+        *,
+        family: str,
+        state: dict | None = None,
+        discovery_data: dict | None = None,
+    ):
+        device = SimpleNamespace(
+            config={"family": family},
+            discovery_data=discovery_data or {},
+            state=state or {},
+            encrypted_credentials=b"",
+            name="Ring device",
+        )
+        return RingCameraDriver(device)
+
+    def test_doorbell_advertises_snapshot_only(self):
+        driver = self.driver(
+            family="doorbots",
+            state={
+                "supports_lights": True,
+                "supports_siren": True,
+            },
+            discovery_data={
+                "ring_capabilities": ["video", "light", "siren"],
+            },
+        )
+
+        actions = [
+            item["action"]
+            for item in driver.capabilities()["controls"]
+        ]
+
+        self.assertEqual(actions, ["snapshot"])
+
+    def test_camera_only_advertises_hardware_supported_controls(self):
+        driver = self.driver(
+            family="stickup_cams",
+            discovery_data={
+                "ring_capabilities": ["video", "light"],
+            },
+        )
+
+        actions = [
+            item["action"]
+            for item in driver.capabilities()["controls"]
+        ]
+
+        self.assertEqual(actions, ["snapshot", "lights"])
+
+    def test_siren_is_not_assumed_for_unknown_ring_camera(self):
+        driver = self.driver(family="stickup_cams")
+
+        actions = [
+            item["action"]
+            for item in driver.capabilities()["controls"]
+        ]
+
+        self.assertEqual(actions, ["snapshot"])
