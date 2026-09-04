@@ -2,6 +2,10 @@ import time
 
 from homehub.core.integrations.base import BaseDriver, Control, IntegrationError
 from homehub.core.integrations.registry import register_driver
+from homehub.core.services.roomba_tracking import (
+    build_roomba_state,
+    roomba_tracking_manager,
+)
 
 
 @register_driver
@@ -92,82 +96,25 @@ class RoombaDriver(BaseDriver):
             "config": {"password": password},
         }
 
-    def _client(self):
-        host = str(self.device.ip_address or "").strip()
-        blid = str(self.config.get("blid") or "").strip()
-        password = str(self.config.get("password") or "")
-        if not host:
-            raise IntegrationError("Roomba requires an IP address.")
-        if not blid or not password:
-            raise IntegrationError("Roomba requires both a BLID and local robot password.")
-        try:
-            from roombapy.roomba_factory import RoombaFactory
-        except ImportError as exc:
-            raise IntegrationError("roombapy is not installed") from exc
-        return RoombaFactory.create_roomba(
-            address=host,
-            blid=blid,
-            password=password,
-            continuous=True,
-        )
+    def _tracked_client(self):
+        return roomba_tracking_manager.ensure(self.device, self.config)
 
-    def _with(self, callback):
-        client = self._client()
-        try:
-            client.connect()
-            time.sleep(0.8)
-            return callback(client)
-        finally:
-            try:
-                client.disconnect()
-            except Exception:
-                pass
-
-    def _read(self, client):
-        master = client.master_state or {}
-        state = master.get("state", master)
-        reported = state.get("reported", state) if isinstance(state, dict) else {}
-        mission = reported.get("cleanMissionStatus") or {}
-        phase = mission.get("phase") or "unknown"
-        pose = reported.get("pose") or reported.get("pose2") or {}
-        point = pose.get("point", pose) if isinstance(pose, dict) else {}
-        location = None
-        try:
-            raw_x, raw_y = float(point.get("x")), float(point.get("y"))
-            location = {
-                "x": raw_x * float(self.config.get("map_scale_x", 1) or 1)
-                + float(self.config.get("map_offset_x", 0) or 0),
-                "y": raw_y * float(self.config.get("map_scale_y", 1) or 1)
-                + float(self.config.get("map_offset_y", 0) or 0),
-                "heading": float(pose.get("theta", 0) or 0),
-                "raw_x": raw_x,
-                "raw_y": raw_y,
-            }
-        except (TypeError, ValueError):
-            pass
-        return {
-            "online": True,
-            "status": "running" if phase in {"run", "hmUsrDock", "hmMidMsn", "charge"} else "idle",
-            "power": "on",
-            "battery": reported.get("batPct"),
-            "phase": phase,
-            "mission": mission,
-            "location": location,
-            "bin_full": bool((reported.get("bin") or {}).get("full"))
-            if isinstance(reported.get("bin"), dict)
-            else None,
-        }
+    def _read_tracked(self):
+        client = self._tracked_client()
+        roomba_tracking_manager.wait_until_ready(self.device.id, timeout=2.5)
+        return build_roomba_state(client, self.config)
 
     async def get_state(self):
-        return await self.to_thread(self._with, self._read)
+        return await self.to_thread(self._read_tracked)
 
     async def _command(self, command):
-        def send(client):
+        def send():
+            client = self._tracked_client()
             client.send_command(command)
             time.sleep(0.25)
             return {"ok": True, "command": command}
 
-        return await self.to_thread(self._with, send)
+        return await self.to_thread(send)
 
     async def action_start(self):
         return await self._command("start")
