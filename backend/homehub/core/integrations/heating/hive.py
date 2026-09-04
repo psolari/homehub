@@ -1,6 +1,7 @@
 from homehub.core.integrations.base import BaseDriver, Control, IntegrationError
 from homehub.core.integrations.registry import register_driver
 from homehub.core.services.accounts import get_active_account, get_account_credentials
+from homehub.core.services.hive_client import hive_devices, open_hive_session
 
 
 @register_driver
@@ -57,35 +58,31 @@ class HiveHeatingDriver(BaseDriver):
     ]
 
     async def _session(self):
-        from apyhiveapi import Auth, Hive
-
         credentials = get_account_credentials(
             get_active_account("hive", account_id=self.config.get("account_id"))
         )
-        auth = Auth(credentials.get("username", ""), credentials.get("password", ""))
-        tokens = await auth.login()
-        hive = Hive(tokens)
-        await hive.startSession(tokens)
-        return hive
+        return await open_hive_session(credentials)
 
     async def _device(self):
         hive = await self._session()
         wanted = str(self.config.get("hive_device_id"))
-        data = getattr(getattr(hive, "session", None), "data", None)
-        devices = getattr(data, "devices", data)
-        if isinstance(devices, dict):
-            device = devices.get(wanted) or next(
-                (value for key, value in devices.items() if str(key) == wanted), None
-            )
-        else:
-            device = next(
-                (
-                    item
-                    for item in (devices or [])
-                    if str(getattr(item, "id", getattr(item, "device_id", ""))) == wanted
-                ),
-                None,
-            )
+        device = next(
+            (
+                item
+                for item in hive_devices(hive)
+                if str(
+                    self._value(
+                        item,
+                        "id",
+                        "device_id",
+                        "deviceId",
+                        default="",
+                    )
+                )
+                == wanted
+            ),
+            None,
+        )
         if device is None:
             raise IntegrationError("Hive heating device was not found")
         return hive, device
@@ -111,27 +108,22 @@ class HiveHeatingDriver(BaseDriver):
             "boost": self._value(device, "boost", "boost_status"),
         }
 
-    async def _invoke(self, names, *args):
-        hive, device = await self._device()
-        for holder in (device, getattr(hive, "heating", None), hive):
-            if holder:
-                for name in names:
-                    function = getattr(holder, name, None)
-                    if function:
-                        result = function(*args)
-                        return await result if hasattr(result, "__await__") else result
-        raise IntegrationError(f"Hive operation is unavailable: {names[0]}")
-
     async def action_target_temperature(self, value):
-        return await self._invoke(("set_target_temperature", "setTargetTemperature"), float(value))
+        hive, device = await self._device()
+        return await hive.heating.set_target_temperature(device, float(value))
 
     async def action_mode(self, value):
-        return await self._invoke(("set_mode", "setMode"), str(value).upper())
+        hive, device = await self._device()
+        return await hive.heating.set_mode(device, str(value).upper())
 
     async def action_boost(self, minutes=30, temperature=22):
-        return await self._invoke(
-            ("boost", "set_boost", "setBoost"), int(minutes), float(temperature)
+        hive, device = await self._device()
+        return await hive.heating.set_boost_on(
+            device,
+            mins=int(minutes),
+            temp=float(temperature),
         )
 
     async def action_boost_off(self):
-        return await self._invoke(("boost_off", "cancel_boost", "cancelBoost"))
+        hive, device = await self._device()
+        return await hive.heating.set_boost_off(device)
