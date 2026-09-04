@@ -42,7 +42,11 @@ from homehub.core.services.devices import (
     run_async,
     validate_setup_payload,
 )
-from homehub.core.services.discovery import discover_account, discover_all
+from homehub.core.services.discovery import (
+    discover_account,
+    discover_all,
+    discover_cloud_accounts,
+)
 
 
 class OpenViewSet(viewsets.ModelViewSet):
@@ -251,6 +255,19 @@ class DiscoveryView(APIView):
             )
         except ValueError as exc:
             return Response({"error": str(exc)}, status=status.HTTP_400_BAD_REQUEST)
+
+
+class CloudDiscoveryView(APIView):
+    permission_classes = [AllowAny]
+
+    def get(self, request):
+        try:
+            return Response({"devices": discover_cloud_accounts()})
+        except Exception as exc:
+            return Response(
+                {"error": str(exc) or exc.__class__.__name__},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
 
 
 class DeviceCatalogView(APIView):
