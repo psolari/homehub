@@ -1,3 +1,5 @@
+import asyncio
+
 from homehub.core.integrations.base import BaseDriver, Control, IntegrationError
 from homehub.core.integrations.registry import register_driver
 from homehub.core.services.accounts import (
@@ -108,9 +110,17 @@ class RingCameraDriver(BaseDriver):
         device, _ = await self._device()
         for name in names:
             function = getattr(device, name, None)
-            if function:
+            if not function:
+                continue
+            if name.startswith("async_"):
                 result = function() if value is None else function(value)
-                return await result if hasattr(result, "__await__") else result
+                return await result
+            # python-ring-doorbell deliberately rejects its deprecated sync
+            # wrappers from a running event loop. Keep compatibility with older
+            # installs by executing a sync fallback in a worker thread.
+            if value is None:
+                return await self.to_thread(function)
+            return await self.to_thread(function, value)
         raise IntegrationError(f"Ring operation is not available: {names[0]}")
 
     async def action_lights(self, value):
@@ -136,11 +146,39 @@ class RingCameraDriver(BaseDriver):
 
     async def camera_frame(self):
         device, _ = await self._device()
-        for name in ("async_get_snapshot", "get_snapshot"):
-            function = getattr(device, name, None)
-            if function:
-                data = function()
-                data = await data if hasattr(data, "__await__") else data
-                if isinstance(data, bytes):
-                    return data, "image/jpeg"
-        return None
+
+        async_snapshot = getattr(device, "async_get_snapshot", None)
+        if async_snapshot:
+            try:
+                try:
+                    snapshot = async_snapshot(retries=2, delay=0.75)
+                except TypeError:
+                    snapshot = async_snapshot()
+                data = await asyncio.wait_for(snapshot, timeout=15)
+            except TimeoutError as exc:
+                raise IntegrationError(
+                    "Ring snapshot timed out. The camera may be waking up; try Refresh camera again."
+                ) from exc
+            if isinstance(data, bytes):
+                return data, "image/jpeg"
+            return None
+
+        sync_snapshot = getattr(device, "get_snapshot", None)
+        if sync_snapshot:
+            try:
+                # Older python-ring-doorbell versions only expose the deprecated
+                # sync method. Calling it directly from this coroutine raises.
+                data = await asyncio.wait_for(
+                    self.to_thread(sync_snapshot),
+                    timeout=15,
+                )
+            except TimeoutError as exc:
+                raise IntegrationError(
+                    "Ring snapshot timed out. The camera may be waking up; try Refresh camera again."
+                ) from exc
+            if isinstance(data, bytes):
+                return data, "image/jpeg"
+
+        raise IntegrationError(
+            "This installed Ring library does not expose a camera snapshot API."
+        )
