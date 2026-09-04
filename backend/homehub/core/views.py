@@ -1,3 +1,4 @@
+from django.db import transaction
 from django.http import HttpResponse
 from django.shortcuts import get_object_or_404
 from django.utils import timezone
@@ -89,6 +90,124 @@ class DashboardGroupViewSet(OpenViewSet):
 class DashboardCardViewSet(OpenViewSet):
     queryset = DashboardCard.objects.select_related("device", "group").all()
     serializer_class = DashboardCardSerializer
+
+    @action(detail=False, methods=["post"], url_path="layout")
+    def layout(self, request):
+        updates = request.data.get("cards") or []
+        if not isinstance(updates, list):
+            return Response(
+                {"error": "cards must be a list"},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        cards = {
+            card.id: card
+            for card in DashboardCard.objects.select_related("group").all()
+        }
+
+        proposed = {}
+        for card in cards.values():
+            proposed[card.id] = {
+                "id": card.id,
+                "group": card.group_id,
+                "grid_x": card.grid_x,
+                "grid_y": card.grid_y,
+                "grid_w": card.grid_w,
+                "grid_h": card.grid_h,
+            }
+
+        for item in updates:
+            try:
+                card_id = int(item["id"])
+            except (KeyError, TypeError, ValueError):
+                return Response(
+                    {"error": "Every layout update requires a valid card id."},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+            if card_id not in cards:
+                return Response(
+                    {"error": f"Dashboard card {card_id} was not found."},
+                    status=status.HTTP_404_NOT_FOUND,
+                )
+
+            current = proposed[card_id]
+            for key in ("grid_x", "grid_y", "grid_w", "grid_h"):
+                if key in item:
+                    try:
+                        current[key] = int(item[key])
+                    except (TypeError, ValueError):
+                        return Response(
+                            {"error": f"{key} must be an integer."},
+                            status=status.HTTP_400_BAD_REQUEST,
+                        )
+            if "group" in item:
+                group = item.get("group")
+                current["group"] = int(group) if group not in (None, "") else None
+
+        for card in proposed.values():
+            if (
+                card["grid_x"] < 0
+                or card["grid_y"] < 0
+                or card["grid_w"] < 2
+                or card["grid_h"] < 2
+                or card["grid_x"] + card["grid_w"] > 12
+            ):
+                return Response(
+                    {
+                        "error": (
+                            f"Card {card['id']} has an invalid dashboard grid position or size."
+                        )
+                    },
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+
+        by_group = {}
+        for card in proposed.values():
+            by_group.setdefault(card["group"], []).append(card)
+
+        for group_cards in by_group.values():
+            for index, left in enumerate(group_cards):
+                for right in group_cards[index + 1 :]:
+                    overlaps = not (
+                        left["grid_x"] + left["grid_w"] <= right["grid_x"]
+                        or right["grid_x"] + right["grid_w"] <= left["grid_x"]
+                        or left["grid_y"] + left["grid_h"] <= right["grid_y"]
+                        or right["grid_y"] + right["grid_h"] <= left["grid_y"]
+                    )
+                    if overlaps:
+                        return Response(
+                            {
+                                "error": (
+                                    f"Dashboard cards {left['id']} and {right['id']} overlap."
+                                )
+                            },
+                            status=status.HTTP_400_BAD_REQUEST,
+                        )
+
+        changed_ids = {int(item["id"]) for item in updates}
+        with transaction.atomic():
+            for card_id in changed_ids:
+                card = cards[card_id]
+                next_card = proposed[card_id]
+                card.group_id = next_card["group"]
+                card.grid_x = next_card["grid_x"]
+                card.grid_y = next_card["grid_y"]
+                card.grid_w = next_card["grid_w"]
+                card.grid_h = next_card["grid_h"]
+                card.save(
+                    update_fields=[
+                        "group",
+                        "grid_x",
+                        "grid_y",
+                        "grid_w",
+                        "grid_h",
+                    ]
+                )
+
+        saved = DashboardCard.objects.select_related("device", "group").filter(
+            id__in=changed_ids
+        )
+        return Response({"cards": DashboardCardSerializer(saved, many=True).data})
 
 
 class DeviceViewSet(OpenViewSet):
