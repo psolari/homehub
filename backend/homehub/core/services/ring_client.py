@@ -35,8 +35,16 @@ async def open_ring_session(credentials: dict[str, Any]):
                 credentials.get("otp"),
             )
         ring = Ring(auth)
-        await ring.async_create_session()
-        await ring.async_update_data()
+
+        # HomeHub only needs the authenticated device inventory here. Ring's
+        # legacy /clients_api/session endpoint can return 406 even when the
+        # OAuth token is valid. python-ring-doorbell normally creates that
+        # mobile-app session before updating devices, but device inventory,
+        # snapshots and device controls do not require HomeHub to register a
+        # separate mobile session. Mark the local Ring object as initialised
+        # and fetch devices directly, bypassing /clients_api/session.
+        ring.session = {"homehub": True}
+        await ring.async_update_devices()
     except Requires2FAError as exc:
         raise RingClientError(
             "Ring requires a fresh two-factor authentication code. Enter the code from Ring and try again."
@@ -95,3 +103,10 @@ def ring_device_identity(device) -> str:
 
 def ring_device_name(device, family: str) -> str:
     return str(getattr(device, "name", None) or f"Ring {family.replace('_', ' ')}")
+
+
+async def close_ring_session(ring) -> None:
+    auth = getattr(ring, "auth", None)
+    closer = getattr(auth, "async_close", None)
+    if closer:
+        await closer()
