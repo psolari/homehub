@@ -1,5 +1,6 @@
 from django.http import HttpResponse
 from django.shortcuts import get_object_or_404
+from django.utils import timezone
 from rest_framework import status, viewsets
 from rest_framework.decorators import action, api_view, permission_classes
 from rest_framework.permissions import AllowAny
@@ -29,7 +30,9 @@ from homehub.core.serializers import (
     RoomSerializer,
     UserSerializer,
 )
+from homehub.core.services.accounts import get_credentials
 from homehub.core.services.device_config import get_device_credentials
+from homehub.core.services.integration_accounts import validate_integration_account
 from homehub.core.services.devices import (
     create_device,
     driver_for,
@@ -39,7 +42,7 @@ from homehub.core.services.devices import (
     run_async,
     validate_setup_payload,
 )
-from homehub.core.services.discovery import discover_all
+from homehub.core.services.discovery import discover_account, discover_all
 
 
 class OpenViewSet(viewsets.ModelViewSet):
@@ -271,19 +274,74 @@ class IntegrationAccountViewSet(OpenViewSet):
     @action(detail=True, methods=["post"])
     def connect(self, request, pk=None):
         account = self.get_object()
-        if account.provider == "spotify":
-            try:
+        try:
+            if account.provider == "spotify":
+                credentials = get_credentials(account)
+                if credentials.get("token_info"):
+                    devices = SpotifyService(account).devices()
+                    account.status, account.error = "connected", ""
+                    account.metadata = {
+                        **(account.metadata or {}),
+                        "verified_at": timezone.now().isoformat(),
+                        "provider_devices_seen": len(devices or []),
+                    }
+                    account.save(update_fields=["status", "error", "metadata"])
+                    data = self.get_serializer(account).data
+                    data["connection"] = {
+                        "message": "Spotify authorization verified.",
+                        "provider_devices_seen": len(devices or []),
+                    }
+                    return Response(data)
+
                 url = SpotifyService(account).authorization_url(state=str(account.id))
-            except Exception as exc:
-                account.status, account.error = "error", str(exc)
+                account.status, account.error = "needs_auth", ""
                 account.save(update_fields=["status", "error"])
-                return Response({"error": str(exc)}, status=status.HTTP_400_BAD_REQUEST)
-            account.status, account.error = "needs_auth", ""
+                data = self.get_serializer(account).data
+                data["authorization_url"] = url
+                return Response(data)
+
+            connection = validate_integration_account(account)
+            discovered = discover_account(account)
+            account.status, account.error = "connected", ""
+            account.metadata = {
+                **(account.metadata or {}),
+                **connection,
+                "discovered_devices_count": len(discovered),
+            }
+            account.save(update_fields=["status", "error", "metadata"])
+            data = self.get_serializer(account).data
+            data["connection"] = connection
+            data["discovered_devices"] = discovered
+            return Response(data)
+        except Exception as exc:
+            account.status, account.error = "error", str(exc)
             account.save(update_fields=["status", "error"])
-            return Response({"authorization_url": url})
-        account.status, account.error = "connected", ""
-        account.save(update_fields=["status", "error"])
-        return Response(self.get_serializer(account).data)
+            return Response(
+                {"error": str(exc), "account": self.get_serializer(account).data},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+    @action(detail=True, methods=["post"])
+    def discover(self, request, pk=None):
+        account = self.get_object()
+        if account.status != "connected":
+            return Response(
+                {"error": "Verify this integration before discovering devices."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        try:
+            devices = discover_account(account)
+            account.metadata = {
+                **(account.metadata or {}),
+                "discovered_devices_count": len(devices),
+                "last_discovered_at": timezone.now().isoformat(),
+            }
+            account.save(update_fields=["metadata"])
+            return Response({"devices": devices, "count": len(devices)})
+        except Exception as exc:
+            account.status, account.error = "error", str(exc)
+            account.save(update_fields=["status", "error"])
+            return Response({"error": str(exc)}, status=status.HTTP_400_BAD_REQUEST)
 
     @action(detail=True, methods=["get"], url_path="spotify-search")
     def spotify_search(self, request, pk=None):
