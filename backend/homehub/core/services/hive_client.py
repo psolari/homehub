@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 from typing import Any
 
 
@@ -23,12 +24,17 @@ async def open_hive_session(credentials: dict[str, Any]):
 
     auth = Auth(username=username, password=password)
     try:
-        tokens = await auth.login()
+        tokens = await asyncio.wait_for(auth.login(), timeout=25)
+    except TimeoutError as exc:
+        raise HiveClientError(
+            "Hive login timed out after 25 seconds while contacting Hive authentication. "
+            "Check internet access from the HomeHub backend and try again."
+        ) from exc
     except Exception as exc:
-        if exc.__class__.__name__ == "HiveSmsRequired":
+        if exc.__class__.__name__ in {"HiveSmsRequired", "HiveReauthRequired"}:
             raise HiveClientError(
-                "Hive accepted the account details but requires SMS two-factor authentication. "
-                "HomeHub needs a Hive 2FA step before this account can be connected."
+                "Hive accepted the account details but requires additional authentication. "
+                "If Hive sent you an SMS code, HomeHub needs that code to complete setup."
             ) from exc
         raise HiveClientError(
             exception_message(exc, "Hive authentication failed")
@@ -39,7 +45,15 @@ async def open_hive_session(credentials: dict[str, Any]):
 
     try:
         hive = Hive(username=username, password=password)
-        await hive.startSession({"tokens": tokens})
+        await asyncio.wait_for(
+            hive.startSession({"tokens": tokens}),
+            timeout=35,
+        )
+    except TimeoutError as exc:
+        raise HiveClientError(
+            "Hive authenticated, but loading the Hive account/devices timed out after 35 seconds. "
+            "The Hive service may be slow; try again shortly."
+        ) from exc
     except Exception as exc:
         raise HiveClientError(
             exception_message(exc, "Hive session setup failed")
