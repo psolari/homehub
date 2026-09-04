@@ -238,18 +238,20 @@ class SpotifyService:
             return {
                 "tracks": [],
                 "albums": [],
+                "artists": [],
                 "playlists": [],
                 "shows": [],
                 "episodes": [],
             }
         result = self.client().search(
             q=query.strip(),
-            type="track,album,playlist,show,episode",
+            type="track,album,artist,playlist,show,episode",
             limit=max(1, min(10, limit)),
         )
         mapping = {
             "tracks": ("tracks", "track"),
             "albums": ("albums", "album"),
+            "artists": ("artists", "artist"),
             "playlists": ("playlists", "playlist"),
             "shows": ("shows", "show"),
             "episodes": ("episodes", "episode"),
