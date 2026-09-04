@@ -8,6 +8,7 @@ from django.utils import timezone
 from homehub.core.models import IntegrationAccount
 from homehub.core.services.accounts import get_credentials, set_credentials
 from homehub.core.services.devices import run_async
+from homehub.core.services.hive_client import hive_devices, open_hive_session
 
 
 class IntegrationAccountError(RuntimeError):
@@ -26,20 +27,11 @@ def _validate_hive(credentials: dict[str, Any]) -> dict[str, Any]:
     _require(credentials, "username", "password")
 
     async def validate():
-        from apyhiveapi import Auth, Hive
-
-        auth = Auth(credentials["username"], credentials["password"])
-        tokens = await auth.login()
-        if not tokens:
-            raise IntegrationAccountError("Hive did not return an authenticated session.")
-        hive = Hive(tokens)
-        await hive.startSession(tokens)
-        data = getattr(getattr(hive, "session", None), "data", None)
-        devices = getattr(data, "devices", data) or []
-        count = len(devices) if hasattr(devices, "__len__") else 0
+        hive = await open_hive_session(credentials)
+        devices = hive_devices(hive)
         return {
             "message": "Hive account authenticated successfully.",
-            "provider_devices_seen": count,
+            "provider_devices_seen": len(devices),
         }
 
     return run_async(validate())
