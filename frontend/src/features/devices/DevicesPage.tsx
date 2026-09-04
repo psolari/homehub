@@ -10,6 +10,7 @@ export default function DevicesPage() {
   const [catalog, setCatalog] = useState<DriverCatalog>({});
   const [found, setFound] = useState<DiscoveryCandidate[]>([]);
   const [scanning, setScanning] = useState(false);
+  const [cloudRefreshing, setCloudRefreshing] = useState(false);
   const [manualSetup, setManualSetup] = useState(false);
   const [candidateSetup, setCandidateSetup] = useState<DiscoveryCandidate | null>(null);
   const [existingSetup, setExistingSetup] = useState<Device | null>(null);
@@ -25,19 +26,53 @@ export default function DevicesPage() {
     setCatalog(nextCatalog);
   };
 
+  const mergeCandidates = (
+    current: DiscoveryCandidate[],
+    incoming: DiscoveryCandidate[],
+  ) => {
+    const merged = new Map<string, DiscoveryCandidate>();
+    for (const candidate of [...current, ...incoming]) {
+      const key =
+        candidate.unique_id ||
+        `${candidate.model}:${candidate.ip_address || candidate.name}`;
+      merged.set(key, candidate);
+    }
+    return [...merged.values()];
+  };
+
+  const refreshCloud = async () => {
+    setCloudRefreshing(true);
+    try {
+      const result = await get<{ devices: DiscoveryCandidate[] }>("/discovery/cloud/");
+      setFound((current) => {
+        const local = current.filter((candidate) => candidate.source !== "cloud");
+        return mergeCandidates(local, result.devices);
+      });
+    } catch (reason) {
+      setError(
+        reason instanceof Error
+          ? reason.message
+          : "Cloud integration discovery failed",
+      );
+    } finally {
+      setCloudRefreshing(false);
+    }
+  };
+
   useEffect(() => {
     void load().catch((reason: Error) => setError(reason.message));
-    void scan();
+    void refreshCloud();
   }, []);
 
   const scan = async () => {
     setScanning(true);
     setError("");
     try {
-      setFound(
-        (await post<{ devices: DiscoveryCandidate[] }>("/discovery/", { include_cloud: true }))
-          .devices,
-      );
+      const [network, cloud] = await Promise.all([
+        post<{ devices: DiscoveryCandidate[] }>("/discovery/", { include_cloud: false }),
+        get<{ devices: DiscoveryCandidate[] }>("/discovery/cloud/"),
+      ]);
+      setFound(mergeCandidates(network.devices, cloud.devices));
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : "Device discovery failed");
     } finally {
@@ -73,13 +108,20 @@ export default function DevicesPage() {
             pairing, credentials or account linking each integration needs before adding it.
           </p>
         </div>
-        <div className="flex gap-2">
+        <div className="flex flex-wrap gap-2">
+          <button
+            onClick={() => void refreshCloud()}
+            disabled={cloudRefreshing}
+            className="rounded-lg border border-zinc-700 px-4 py-2 text-sm text-zinc-300 disabled:opacity-50"
+          >
+            {cloudRefreshing ? "Refreshing cloud…" : "Refresh cloud devices"}
+          </button>
           <button
             onClick={() => void scan()}
             disabled={scanning}
             className="rounded-lg bg-cyan-700 px-4 py-2 text-sm font-semibold disabled:opacity-50"
           >
-            {scanning ? "Scanning…" : "Scan network"}
+            {scanning ? "Scanning…" : "Scan local network"}
           </button>
           <button
             onClick={() => setManualSetup(true)}
@@ -122,7 +164,7 @@ export default function DevicesPage() {
                 <div className="truncate font-medium">{candidate.name}</div>
                 <div className="mt-1 text-xs text-zinc-500">
                   {candidate.manufacturer || "Unknown manufacturer"} · {candidate.model} ·{" "}
-                  {candidate.ip_address || "cloud"}
+                  {candidate.ip_address || "cloud account"}
                 </div>
               </div>
               <button
