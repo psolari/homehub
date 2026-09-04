@@ -4,6 +4,7 @@ from unittest.mock import AsyncMock
 
 from django.test import SimpleTestCase
 
+from homehub.core.integrations.base import IntegrationError
 from homehub.core.integrations.security.ring import RingCameraDriver
 
 
@@ -27,7 +28,7 @@ class RingCameraSnapshotTests(SimpleTestCase):
         result = asyncio.run(driver.camera_frame())
 
         self.assertEqual(result, (b"jpeg-data", "image/jpeg"))
-        snapshot.assert_awaited_once_with(retries=2, delay=0.75)
+        snapshot.assert_awaited_once_with(retries=10, delay=1)
 
     def test_deprecated_sync_snapshot_runs_in_worker_thread(self):
         driver = self.driver()
@@ -50,3 +51,20 @@ class RingCameraSnapshotTests(SimpleTestCase):
 
         self.assertEqual(result, (b"jpeg-data", "image/jpeg"))
         self.assertFalse(running_loop_seen["value"])
+
+
+    def test_missing_fresh_snapshot_is_reported_as_ring_error(self):
+        driver = self.driver()
+        snapshot = AsyncMock(return_value=None)
+        ring_device = SimpleNamespace(async_get_snapshot=snapshot)
+        driver._device = AsyncMock(
+            return_value=(ring_device, "doorbots", SimpleNamespace(auth=None))
+        )
+
+        with self.assertRaisesRegex(
+            IntegrationError,
+            "accepted the snapshot request but did not publish a fresh image",
+        ):
+            asyncio.run(driver.camera_frame())
+
+        snapshot.assert_awaited_once_with(retries=10, delay=1)
