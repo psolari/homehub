@@ -8,6 +8,7 @@ from homehub.core.services.accounts import (
     set_account_credentials,
 )
 from homehub.core.services.ring_client import (
+    close_ring_session,
     open_ring_session,
     ring_device_groups,
     ring_device_identity,
@@ -81,7 +82,8 @@ class RingCameraDriver(BaseDriver):
             for device in values:
                 identity = ring_device_identity(device)
                 if identity == wanted or str(getattr(device, "name", "")) == wanted:
-                    return device, family
+                    return device, family, ring
+        await close_ring_session(ring)
         raise IntegrationError("Ring device was not found")
 
     @staticmethod
@@ -93,35 +95,41 @@ class RingCameraDriver(BaseDriver):
             return default
 
     async def get_state(self):
-        device, family = await self._device()
-        return {
-            "online": True,
-            "status": "on",
-            "power": "on",
-            "family": family,
-            "battery": self._attr(device, "battery_life"),
-            "wifi_signal": self._attr(device, "wifi_signal_strength"),
-            "lights": self._attr(device, "lights"),
-            "siren": self._attr(device, "siren"),
-            "camera_available": family in {"doorbells", "doorbots", "stickup_cams", "cameras"},
-        }
+        device, family, ring = await self._device()
+        try:
+            return {
+                "online": True,
+                "status": "on",
+                "power": "on",
+                "family": family,
+                "battery": self._attr(device, "battery_life"),
+                "wifi_signal": self._attr(device, "wifi_signal_strength"),
+                "lights": self._attr(device, "lights"),
+                "siren": self._attr(device, "siren"),
+                "camera_available": family in {"doorbells", "doorbots", "stickup_cams", "cameras"},
+            }
+        finally:
+            await close_ring_session(ring)
 
     async def _set(self, names, value=None):
-        device, _ = await self._device()
-        for name in names:
-            function = getattr(device, name, None)
-            if not function:
-                continue
-            if name.startswith("async_"):
-                result = function() if value is None else function(value)
-                return await result
-            # python-ring-doorbell deliberately rejects its deprecated sync
-            # wrappers from a running event loop. Keep compatibility with older
-            # installs by executing a sync fallback in a worker thread.
-            if value is None:
-                return await self.to_thread(function)
-            return await self.to_thread(function, value)
-        raise IntegrationError(f"Ring operation is not available: {names[0]}")
+        device, _, ring = await self._device()
+        try:
+            for name in names:
+                function = getattr(device, name, None)
+                if not function:
+                    continue
+                if name.startswith("async_"):
+                    result = function() if value is None else function(value)
+                    return await result
+                # python-ring-doorbell deliberately rejects its deprecated sync
+                # wrappers from a running event loop. Keep compatibility with older
+                # installs by executing a sync fallback in a worker thread.
+                if value is None:
+                    return await self.to_thread(function)
+                return await self.to_thread(function, value)
+            raise IntegrationError(f"Ring operation is not available: {names[0]}")
+        finally:
+            await close_ring_session(ring)
 
     async def action_lights(self, value):
         return await self._set(("async_set_lights", "set_lights"), bool(value))
@@ -145,7 +153,7 @@ class RingCameraDriver(BaseDriver):
         return {"available": (await self.camera_frame()) is not None}
 
     async def camera_frame(self):
-        device, _ = await self._device()
+        device, _, ring = await self._device()
 
         async_snapshot = getattr(device, "async_get_snapshot", None)
         if async_snapshot:
@@ -179,6 +187,9 @@ class RingCameraDriver(BaseDriver):
             if isinstance(data, bytes):
                 return data, "image/jpeg"
 
-        raise IntegrationError(
-            "This installed Ring library does not expose a camera snapshot API."
-        )
+        try:
+            raise IntegrationError(
+                "This installed Ring library does not expose a camera snapshot API."
+            )
+        finally:
+            await close_ring_session(ring)
