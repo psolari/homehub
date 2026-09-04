@@ -1,5 +1,7 @@
 from __future__ import annotations
 from typing import Any
+from django.utils import timezone
+
 from homehub.core.models import IntegrationAccount
 from homehub.core.services.accounts import get_credentials, set_credentials
 
@@ -20,7 +22,11 @@ class SpotifyService:
         token_info = self.oauth.get_access_token(code, as_dict=True, check_cache=False)
         set_credentials(self.account, {"token_info": token_info})
         self.account.status, self.account.error = "connected", ""
-        self.account.save(update_fields=["status","error"])
+        self.account.metadata = {
+            **(self.account.metadata or {}),
+            "verified_at": timezone.now().isoformat(),
+        }
+        self.account.save(update_fields=["status", "error", "metadata"])
         return token_info
 
     def _token_info(self):
