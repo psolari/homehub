@@ -33,8 +33,9 @@ async def open_hive_session(credentials: dict[str, Any]):
     except Exception as exc:
         if exc.__class__.__name__ in {"HiveSmsRequired", "HiveReauthRequired"}:
             raise HiveClientError(
-                "Hive accepted the account details but requires additional authentication. "
-                "If Hive sent you an SMS code, HomeHub needs that code to complete setup."
+                "Hive accepted the account details but requires SMS two-factor authentication "
+                "or account re-authentication. If Hive sent you an SMS code, HomeHub needs "
+                "that code to complete setup."
             ) from exc
         raise HiveClientError(
             exception_message(exc, "Hive authentication failed")
