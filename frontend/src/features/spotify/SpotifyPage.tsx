@@ -124,11 +124,12 @@ export default function SpotifyPage() {
       ) {
         return current;
       }
-      const active =
-        next.playback.device?.id &&
-        next.outputs.find(
-          (output) => output.spotify_device_id === next.playback.device?.id,
-        );
+      const activeDeviceId = next.playback.device?.id;
+      const active = activeDeviceId
+        ? next.outputs.find(
+            (output) => output.spotify_device_id === activeDeviceId,
+          )
+        : undefined;
       if (active?.spotify_device_id) return active.spotify_device_id;
       const homehub = next.outputs.find(
         (output) => output.available && output.homehub_device_id,
