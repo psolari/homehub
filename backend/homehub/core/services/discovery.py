@@ -351,6 +351,17 @@ def _discover_ring_account(account) -> list[Candidate]:
                     device_id = ring_device_identity(device)
                     if not device_id:
                         continue
+
+                    has_capability = getattr(device, "has_capability", None)
+                    ring_capabilities: list[str] = []
+                    if has_capability:
+                        for capability_name in ("video", "light", "siren", "battery"):
+                            try:
+                                if has_capability(capability_name):
+                                    ring_capabilities.append(capability_name)
+                            except Exception:
+                                pass
+
                     result.append(
                         Candidate(
                             unique_id=f"ring:{device_id}",
@@ -373,6 +384,7 @@ def _discover_ring_account(account) -> list[Candidate]:
                                 "method": "ring_cloud",
                                 "family": family,
                                 "kind": str(getattr(device, "kind", "") or ""),
+                                "ring_capabilities": ring_capabilities,
                             },
                         )
                     )
