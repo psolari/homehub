@@ -10,7 +10,11 @@ export async function request<T>(path: string, options: RequestInit = {}): Promi
     let message = text || `Request failed (${response.status})`;
     try {
       const parsed = JSON.parse(text);
-      message = parsed.error || parsed.detail || message;
+      const parsedMessage =
+        (typeof parsed.error === "string" && parsed.error.trim()) ||
+        (typeof parsed.detail === "string" && parsed.detail.trim()) ||
+        (typeof parsed.account?.error === "string" && parsed.account.error.trim());
+      message = parsedMessage || `Request failed (${response.status})`;
     } catch {
       message = text || message;
     }
