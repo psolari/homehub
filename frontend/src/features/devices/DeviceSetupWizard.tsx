@@ -464,11 +464,15 @@ function DeviceStep({
           placeholder={driver.setup?.requires_ip ? "Required for this integration" : "Optional / cloud device"}
         />
         <TextField
-          label="MAC address"
+          label={driver.setup?.auto_discover_mac ? "MAC address (auto-detected)" : "MAC address"}
           required={driver.setup?.requires_mac}
           value={values.mac_address}
           onChange={(value) => onBasic("mac_address", value)}
-          placeholder="Optional unless required for wake/control"
+          placeholder={
+            driver.setup?.auto_discover_mac
+              ? "HomeHub will detect this automatically"
+              : "Optional unless required for wake/control"
+          }
         />
         <TextField
           label="Manufacturer"
@@ -758,7 +762,13 @@ function FinishStep({
         <Summary label="Name" value={values.name} />
         <Summary label="Integration" value={driver.display_name} />
         <Summary label="IP" value={values.ip_address || "Cloud / not required"} />
-        <Summary label="MAC" value={values.mac_address || "Not configured"} />
+        <Summary
+          label="MAC"
+          value={
+            values.mac_address ||
+            (driver.setup?.auto_discover_mac ? "Will detect automatically during setup" : "Not configured")
+          }
+        />
       </div>
       {missing.length ? (
         <div className="rounded-xl border border-amber-900 bg-amber-950/30 p-3 text-sm text-amber-300">
