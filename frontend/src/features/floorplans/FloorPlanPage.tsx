@@ -146,6 +146,34 @@ export default function FloorPlanPage() {
   const selectedRoom = selection?.kind === "room" ? plan?.rooms.find((room) => room.id === selection.id) || null : null;
   const selectedObject = selection?.kind === "object" ? plan?.objects.find((object) => object.id === selection.id) || null : null;
   const deviceById = useMemo(() => new Map(devices.map((device) => [device.id, device])), [devices]);
+
+  useEffect(() => {
+    if (!plan) return;
+
+    for (const object of plan.objects) {
+      if (!object.device || object.object_type !== "device") continue;
+      const device = deviceById.get(object.device);
+      if (!isTrackedVacuum(device)) continue;
+
+      const raw = roombaRawPosition(device);
+      if (!raw || object.properties?.tracking_anchor) continue;
+
+      const properties = {
+        ...object.properties,
+        tracking_scale_x: Number(object.properties?.tracking_scale_x ?? 0.1),
+        tracking_scale_y: Number(object.properties?.tracking_scale_y ?? 0.1),
+        tracking_anchor: {
+          raw_x: raw.x,
+          raw_y: raw.y,
+          floor_x: object.x + object.width / 2,
+          floor_y: object.y + object.height / 2,
+        },
+      };
+
+      updateObjectLocal(object.id, { properties });
+      void patch(`/floor-plan-objects/${object.id}/`, { properties });
+    }
+  }, [plan?.id, devices]);
   const filteredPalette = useMemo(() => {
     const term = paletteSearch.trim().toLowerCase();
     return floorPlanPalette.filter(
@@ -274,7 +302,12 @@ export default function FloorPlanPage() {
         height: size.height,
       },
       device.id,
-      { device_appearance: "auto" },
+      {
+        device_appearance: "auto",
+        ...(isTrackedVacuum(device)
+          ? { tracking_scale_x: 0.1, tracking_scale_y: 0.1 }
+          : {}),
+      },
     );
     setNewDeviceId("");
   };
@@ -442,6 +475,20 @@ export default function FloorPlanPage() {
         x: current.origin.x + dx,
         y: current.origin.y + dy,
       };
+      const trackingAnchor = current.origin.properties?.tracking_anchor;
+      if (trackingAnchor && current.origin.device) {
+        next = {
+          ...next,
+          properties: {
+            ...current.origin.properties,
+            tracking_anchor: {
+              ...trackingAnchor,
+              floor_x: next.x + next.width / 2,
+              floor_y: next.y + next.height / 2,
+            },
+          },
+        };
+      }
       if (current.origin.object_type === "wall") {
         const walls = currentPlan.objects.filter((item) => item.object_type === "wall");
         const snapped = snapPoint({ x: next.x, y: next.y }, collectSnapPoints(currentPlan.rooms, walls, current.id), snapEnabled);
@@ -646,10 +693,11 @@ export default function FloorPlanPage() {
 
               {plan.objects.map((object) => {
                 const device = object.device ? deviceById.get(object.device) : undefined;
+                const displayObject = trackedFloorPlanObject(object, device, plan);
                 return (
                   <ObjectShape
                     key={object.id}
-                    object={object}
+                    object={displayObject}
                     device={device}
                     selected={selection?.kind === "object" && selection.id === object.id}
                     onSelect={(event) => {
@@ -753,6 +801,69 @@ function RoomShape({ room, selected, onSelect, onResize }: {
       </>}
     </g>
   );
+}
+
+function isTrackedVacuum(device?: Device) {
+  if (!device) return false;
+  return (
+    device.device_type === "vacuum" ||
+    String(device.model || "").toLowerCase().includes("roomba") ||
+    String(device.model || "").toLowerCase().includes("irobot")
+  );
+}
+
+function roombaRawPosition(device?: Device) {
+  if (!isTrackedVacuum(device)) return null;
+  const location = device?.state?.location;
+  if (!location) return null;
+
+  const x = Number(location.raw_x ?? location.x);
+  const y = Number(location.raw_y ?? location.y);
+  if (!Number.isFinite(x) || !Number.isFinite(y)) return null;
+
+  return {
+    x,
+    y,
+    heading: Number(location.heading || 0),
+  };
+}
+
+function trackedFloorPlanObject(
+  object: FloorPlanObject,
+  device: Device | undefined,
+  plan: FloorPlan,
+): FloorPlanObject {
+  if (!isTrackedVacuum(device)) return object;
+
+  const raw = roombaRawPosition(device);
+  const anchor = object.properties?.tracking_anchor;
+  if (!raw || !anchor) return object;
+
+  const anchorRawX = Number(anchor.raw_x);
+  const anchorRawY = Number(anchor.raw_y);
+  const anchorFloorX = Number(anchor.floor_x);
+  const anchorFloorY = Number(anchor.floor_y);
+  if (
+    !Number.isFinite(anchorRawX) ||
+    !Number.isFinite(anchorRawY) ||
+    !Number.isFinite(anchorFloorX) ||
+    !Number.isFinite(anchorFloorY)
+  ) {
+    return object;
+  }
+
+  const scaleX = Number(object.properties?.tracking_scale_x ?? 0.1);
+  const scaleY = Number(object.properties?.tracking_scale_y ?? 0.1);
+  const centerX =
+    anchorFloorX + (raw.x - anchorRawX) * (Number.isFinite(scaleX) ? scaleX : 0.1);
+  const centerY =
+    anchorFloorY + (raw.y - anchorRawY) * (Number.isFinite(scaleY) ? scaleY : 0.1);
+
+  return {
+    ...object,
+    x: clamp(centerX - object.width / 2, 0, Math.max(0, plan.width - object.width)),
+    y: clamp(centerY - object.height / 2, 0, Math.max(0, plan.height - object.height)),
+  };
 }
 
 function ObjectShape({ object, device, selected, onSelect, onResize, onWallEnd, onOpenDevice }: {
@@ -1102,6 +1213,71 @@ function ObjectInspector({ object, device, onChange, onDuplicate, onDelete, onOp
           This only changes how the linked device is drawn on this floor plan. Device controls and live state are unchanged.
         </span>
       </label>
+
+      {isTrackedVacuum(device) && (
+        <div className="space-y-3 rounded-xl border border-zinc-800 bg-zinc-950/60 p-3">
+          <div>
+            <div className="text-xs font-semibold text-white">Live Roomba tracking</div>
+            <div className="mt-1 text-[11px] leading-4 text-zinc-500">
+              {device.state?.tracking_status === "live"
+                ? "Receiving live pose updates from the Roomba."
+                : "Connected, but waiting for the Roomba to publish a pose. Start a cleaning mission to generate movement data."}
+            </div>
+          </div>
+          <div className="grid grid-cols-2 gap-2">
+            <NumberField
+              label="X scale"
+              value={Number(object.properties?.tracking_scale_x ?? 0.1)}
+              onChange={(value) =>
+                onChange({
+                  properties: {
+                    ...object.properties,
+                    tracking_scale_x: value,
+                  },
+                })
+              }
+            />
+            <NumberField
+              label="Y scale"
+              value={Number(object.properties?.tracking_scale_y ?? 0.1)}
+              onChange={(value) =>
+                onChange({
+                  properties: {
+                    ...object.properties,
+                    tracking_scale_y: value,
+                  },
+                })
+              }
+            />
+          </div>
+          <div className="text-[10px] leading-4 text-zinc-600">
+            Roomba map coordinates are usually much larger than floor-plan pixels.
+            Negative scale values can flip an axis if needed.
+          </div>
+          <button
+            type="button"
+            disabled={!roombaRawPosition(device)}
+            onClick={() => {
+              const raw = roombaRawPosition(device);
+              if (!raw) return;
+              onChange({
+                properties: {
+                  ...object.properties,
+                  tracking_anchor: {
+                    raw_x: raw.x,
+                    raw_y: raw.y,
+                    floor_x: object.x + object.width / 2,
+                    floor_y: object.y + object.height / 2,
+                  },
+                },
+              });
+            }}
+            className="w-full rounded-lg border border-cyan-900/70 px-3 py-2 text-xs text-cyan-300 disabled:opacity-40"
+          >
+            Re-anchor tracking at current placement
+          </button>
+        </div>
+      )}
     </>}
     {object.object_type === "label" && <label className="block text-xs text-zinc-500">Text<input value={String(object.properties?.label || "")} onChange={(event) => onChange({ properties: { ...object.properties, label: event.target.value } })} className="mt-1 w-full rounded-lg border border-zinc-700 bg-zinc-950 p-2 text-sm text-white" /></label>}
     {object.object_type !== "wall" && <div className="grid grid-cols-2 gap-2"><NumberField label="Width" value={object.width} onChange={(value) => onChange({ width: value })} /><NumberField label="Height" value={object.height} onChange={(value) => onChange({ height: value })} /></div>}
