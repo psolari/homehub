@@ -18,6 +18,8 @@ export default function DeviceModal({
   const [current, setCurrent] = useState<Device | null>(device);
   const [frameNonce, setFrameNonce] = useState(0);
   const [cameraError, setCameraError] = useState("");
+  const [cameraSrc, setCameraSrc] = useState("");
+  const [cameraLoading, setCameraLoading] = useState(false);
 
   useEffect(() => {
     setCurrent(device);
@@ -26,6 +28,64 @@ export default function DeviceModal({
       setFrameNonce((value) => value + 1);
     }
   }, [device]);
+  useEffect(() => {
+    const cameraDevice =
+      current &&
+      (current.device_type === "camera" ||
+        Boolean(current.state?.camera_available));
+    if (!open || !current?.id || !cameraDevice) return;
+
+    let cancelled = false;
+    let objectUrl = "";
+
+    const loadCamera = async () => {
+      setCameraLoading(true);
+      setCameraError("");
+      try {
+        const response = await fetch(
+          `${apiUrl(`/devices/${current.id}/camera-frame/`)}?t=${frameNonce}`,
+          { cache: "no-store" },
+        );
+        if (!response.ok) {
+          let message = `Camera request failed (${response.status})`;
+          try {
+            const payload = (await response.json()) as { error?: string };
+            if (payload.error) message = payload.error;
+          } catch {
+            // Keep the HTTP status fallback when the upstream response is not JSON.
+          }
+          throw new Error(message);
+        }
+
+        const blob = await response.blob();
+        if (!blob.size || !blob.type.startsWith("image/")) {
+          throw new Error("Ring returned a response, but it was not a camera image.");
+        }
+
+        objectUrl = URL.createObjectURL(blob);
+        if (!cancelled) setCameraSrc(objectUrl);
+      } catch (reason) {
+        if (!cancelled) {
+          setCameraSrc("");
+          setCameraError(
+            reason instanceof Error
+              ? reason.message
+              : "Could not load the Ring snapshot.",
+          );
+        }
+      } finally {
+        if (!cancelled) setCameraLoading(false);
+      }
+    };
+
+    void loadCamera();
+
+    return () => {
+      cancelled = true;
+      if (objectUrl) URL.revokeObjectURL(objectUrl);
+    };
+  }, [open, current?.id, current?.device_type, current?.state?.camera_available, frameNonce]);
+
   useEffect(() => {
     if (!open || !device) return;
     let cancelled = false;
@@ -57,6 +117,7 @@ export default function DeviceModal({
   const control = async (action: string, parameters?: Record<string, unknown>) => {
     if (action === "snapshot") {
       setCameraError("");
+      setCameraSrc("");
       setFrameNonce((value) => value + 1);
       return { state: current.state || {} };
     }
@@ -87,20 +148,28 @@ export default function DeviceModal({
         <div className="space-y-5">
           {isCamera && (
             <div className="space-y-2">
-              <img
-                key={frameNonce}
-                className="aspect-video w-full rounded-xl border border-zinc-800 bg-black object-contain"
-                src={`${apiUrl(`/devices/${current.id}/camera-frame/`)}?t=${frameNonce}`}
-                alt={`${current.name} camera`}
-                onLoad={() => setCameraError("")}
-                onError={() =>
-                  setCameraError(
-                    "Could not load a Ring snapshot. The camera may be waking up or Ring may have timed out. Use Refresh camera to try again.",
-                  )
-                }
-              />
+              <div className="relative aspect-video w-full overflow-hidden rounded-xl border border-zinc-800 bg-black">
+                {cameraSrc ? (
+                  <img
+                    className="h-full w-full object-contain"
+                    src={cameraSrc}
+                    alt={`${current.name} camera`}
+                  />
+                ) : (
+                  <div className="flex h-full items-center justify-center px-6 text-center text-sm text-zinc-500">
+                    {cameraLoading
+                      ? "Requesting a fresh Ring snapshot…"
+                      : "No camera image loaded."}
+                  </div>
+                )}
+                {cameraLoading && cameraSrc && (
+                  <div className="absolute inset-x-0 bottom-0 bg-black/70 px-3 py-2 text-center text-xs text-zinc-300">
+                    Refreshing Ring snapshot…
+                  </div>
+                )}
+              </div>
               {cameraError && (
-                <div className="rounded-lg border border-amber-900/60 bg-amber-950/30 px-3 py-2 text-xs text-amber-300">
+                <div className="rounded-lg border border-amber-900/60 bg-amber-950/30 px-3 py-2 text-xs leading-5 text-amber-300">
                   {cameraError}
                 </div>
               )}
