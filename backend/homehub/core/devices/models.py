@@ -67,16 +67,38 @@ class Device(models.Model):
         return self.name
 
 
+class DashboardGroup(models.Model):
+    name = models.CharField(max_length=100)
+    order = models.PositiveIntegerField(default=0)
+
+    class Meta:
+        ordering = ["order", "id"]
+
+    def __str__(self) -> str:
+        return self.name
+
+
 class DashboardCard(models.Model):
     SIZE_CHOICES = [("small", "Small"), ("medium", "Medium"), ("large", "Large")]
     device = models.OneToOneField(Device, related_name="dashboard_card", on_delete=models.CASCADE)
+    group = models.ForeignKey(
+        DashboardGroup,
+        related_name="cards",
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+    )
     enabled = models.BooleanField(default=True)
     size = models.CharField(max_length=10, choices=SIZE_CHOICES, default="medium")
     order = models.PositiveIntegerField(default=0)
     visible_controls = models.JSONField(default=list, blank=True)
+    grid_x = models.PositiveSmallIntegerField(default=0)
+    grid_y = models.PositiveSmallIntegerField(default=0)
+    grid_w = models.PositiveSmallIntegerField(default=4)
+    grid_h = models.PositiveSmallIntegerField(default=3)
 
     class Meta:
-        ordering = ["order", "id"]
+        ordering = ["group_id", "grid_y", "grid_x", "order", "id"]
 
 
 class IntegrationAccount(models.Model):
