@@ -24,13 +24,6 @@ class SamsungTizenDriver(BaseDriver):
             "description": "Normally generated automatically after approving HomeHub on the television.",
         },
         {
-            "name": "mac_address",
-            "label": "MAC address",
-            "type": "string",
-            "required": False,
-            "description": "Required if you want HomeHub to wake the television from standby.",
-        },
-        {
             "name": "port",
             "label": "WebSocket port",
             "type": "number",
@@ -42,11 +35,12 @@ class SamsungTizenDriver(BaseDriver):
         "description": "Pair HomeHub with a Samsung Tizen television and save its network token securely.",
         "requires_ip": True,
         "requires_mac": False,
+        "auto_discover_mac": True,
         "instructions": [
             "Turn the television on and make sure it is connected to the same network as HomeHub.",
             "Leave Pairing token blank for a first-time setup. HomeHub will open the Samsung remote-control WebSocket during the connection test.",
             "When the television asks whether HomeHub may control it, choose Allow. The returned token is stored encrypted by HomeHub.",
-            "Add the television MAC address if you want the Power on control to work from standby.",
+            "HomeHub discovers and stores the television MAC address automatically for Wake-on-LAN when it is reachable on the local network.",
         ],
         "test_connection": True,
         "advanced_fields": ["token", "port"],
@@ -107,10 +101,7 @@ class SamsungTizenDriver(BaseDriver):
         if path.exists():
             token = path.read_text().strip()
             if token and token != self.config.get("token"):
-                from homehub.core.services.device_config import set_device_credentials
-
-                set_device_credentials(self.device, {"token": token})
-                self.config["token"] = token
+                self.stage_credentials({"token": token})
 
     async def initialize(self):
         # Opening the remote-control WebSocket is the pairing operation. It is
