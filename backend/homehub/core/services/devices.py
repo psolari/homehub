@@ -42,6 +42,41 @@ def _ensure_device_mac(device: Device) -> None:
         device.save(update_fields=["mac_address"])
 
 
+def _next_dashboard_slot(
+    *,
+    width: int = 4,
+    height: int = 3,
+    group_id: int | None = None,
+) -> tuple[int, int]:
+    cards = list(
+        DashboardCard.objects.filter(group_id=group_id).values(
+            "grid_x",
+            "grid_y",
+            "grid_w",
+            "grid_h",
+        )
+    )
+
+    for y in range(200):
+        for x in range(0, 12 - width + 1):
+            overlaps = any(
+                not (
+                    x + width <= card["grid_x"]
+                    or card["grid_x"] + card["grid_w"] <= x
+                    or y + height <= card["grid_y"]
+                    or card["grid_y"] + card["grid_h"] <= y
+                )
+                for card in cards
+            )
+            if not overlaps:
+                return x, y
+
+    return 0, max(
+        (card["grid_y"] + card["grid_h"] for card in cards),
+        default=0,
+    )
+
+
 def _normalise_status(state: dict[str, Any]) -> str:
     value = str(state.get("status") or "unknown").lower()
     if value in dict(Device.STATUS_CHOICES):
@@ -209,13 +244,18 @@ def create_device(
         device.is_online = False
         device.save(update_fields=["state", "status", "is_online"])
 
+    grid_x, grid_y = _next_dashboard_slot()
     DashboardCard.objects.get_or_create(
         device=device,
         defaults={
             "visible_controls": [
                 control["action"]
                 for control in (device.capabilities or {}).get("controls", [])[:4]
-            ]
+            ],
+            "grid_x": grid_x,
+            "grid_y": grid_y,
+            "grid_w": 4,
+            "grid_h": 3,
         },
     )
     return device
