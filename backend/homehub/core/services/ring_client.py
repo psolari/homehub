@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
+import time
 from typing import Any
 
 
@@ -110,3 +111,69 @@ async def close_ring_session(ring) -> None:
     closer = getattr(auth, "async_close", None)
     if closer:
         await closer()
+
+
+
+async def take_ring_snapshot(
+    ring,
+    device,
+    *,
+    max_age: int = 30,
+    max_wait: int = 12,
+) -> bytes:
+    """Fetch a Ring snapshot using Ring's newer server-wait snapshot endpoint.
+
+    python-ring-doorbell 0.9.14's async_get_snapshot() uses the older
+    timestamps + image polling flow, which is unreliable for battery cameras.
+    The library has an upstream replacement based on app-snaps.ring.com that
+    lets Ring wait server-side for a fresh image. HomeHub uses the same API
+    contract here while remaining compatible with the released library.
+    """
+    upstream = getattr(device, "async_take_snapshot", None)
+    if upstream:
+        data = await upstream(max_age=max_age, max_wait=max_wait)
+        if isinstance(data, bytes) and data:
+            return data
+        raise RingClientError(
+            "Ring completed the snapshot request but returned no image data."
+        )
+
+    attrs = getattr(device, "_attrs", {}) or {}
+    device_id = (
+        attrs.get("id")
+        or getattr(device, "device_api_id", None)
+        or getattr(device, "id", None)
+    )
+    if device_id is None:
+        raise RingClientError(
+            "Ring did not expose the camera API ID required for snapshots."
+        )
+
+    params = {
+        "after-ms": (int(time.time()) - max(0, int(max_age))) * 1000,
+        "max-wait-ms": max(1, int(max_wait)) * 1000,
+        "extras": "force",
+    }
+
+    try:
+        response = await ring.async_query(
+            f"/snapshots/next/{device_id}",
+            extra_params=params,
+            base_uri="https://app-snaps.ring.com",
+            timeout=max(1, int(max_wait)) + 2,
+        )
+    except Exception as exc:
+        message = exception_message(exc, "Ring snapshot request failed")
+        if "404" in message:
+            raise RingClientError(
+                "Ring did not produce a snapshot before its server-side timeout. "
+                "Wait a few seconds and try Refresh camera again."
+            ) from exc
+        raise RingClientError(message) from exc
+
+    data = getattr(response, "content", None)
+    if not isinstance(data, bytes) or not data:
+        raise RingClientError(
+            "Ring's snapshot service responded but did not return image data."
+        )
+    return data
