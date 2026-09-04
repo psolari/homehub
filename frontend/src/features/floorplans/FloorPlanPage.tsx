@@ -388,7 +388,25 @@ export default function FloorPlanPage() {
           void saveRoom(next);
         }
         if (selection.kind === "object" && selectedObject) {
-          const next = { ...selectedObject, x: selectedObject.x + delta.x, y: selectedObject.y + delta.y };
+          let next = {
+            ...selectedObject,
+            x: selectedObject.x + delta.x,
+            y: selectedObject.y + delta.y,
+          };
+          const trackingAnchor = selectedObject.properties?.tracking_anchor;
+          if (trackingAnchor && selectedObject.device) {
+            next = {
+              ...next,
+              properties: {
+                ...selectedObject.properties,
+                tracking_anchor: {
+                  ...trackingAnchor,
+                  floor_x: next.x + next.width / 2,
+                  floor_y: next.y + next.height / 2,
+                },
+              },
+            };
+          }
           updateObjectLocal(selectedObject.id, next);
           void saveObject(next);
         }
