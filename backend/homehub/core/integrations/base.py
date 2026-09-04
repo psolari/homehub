@@ -26,6 +26,7 @@ class Control:
     type: str = "button"
     group: str = "main"
     icon: str | None = None
+    state_key: str | None = None
     parameter: str | None = None
     minimum: float | None = None
     maximum: float | None = None
@@ -43,6 +44,7 @@ class Control:
         }
         for key, value in {
             "icon": self.icon,
+            "state_key": self.state_key,
             "parameter": self.parameter,
             "min": self.minimum,
             "max": self.maximum,
