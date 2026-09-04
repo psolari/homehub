@@ -1,7 +1,11 @@
 from homehub.core.integrations.base import BaseDriver, Control, IntegrationError
 from homehub.core.integrations.registry import register_driver
 from homehub.core.services.accounts import get_active_account, get_account_credentials
-from homehub.core.services.hive_client import hive_devices, open_hive_session
+from homehub.core.services.hive_client import (
+    hive_device_identity,
+    hive_devices,
+    open_hive_session,
+)
 
 
 @register_driver
@@ -73,16 +77,7 @@ class HiveHeatingDriver(BaseDriver):
             (
                 item
                 for item in hive_devices(hive)
-                if str(
-                    self._value(
-                        item,
-                        "id",
-                        "device_id",
-                        "deviceId",
-                        default="",
-                    )
-                )
-                == wanted
+                if hive_device_identity(item) == wanted
             ),
             None,
         )
