@@ -23,22 +23,16 @@ class LGWebOSDriver(BaseDriver):
             "required": False,
             "description": "Normally created automatically after you approve HomeHub on the TV.",
         },
-        {
-            "name": "mac_address",
-            "label": "MAC address",
-            "type": "string",
-            "required": False,
-            "description": "Recommended so HomeHub can wake the TV with Wake-on-LAN.",
-        },
     ]
     setup_schema = {
         "description": "Pair HomeHub with an LG webOS television on the local network.",
         "requires_ip": True,
         "requires_mac": False,
+        "auto_discover_mac": True,
         "instructions": [
             "Turn the TV on and make sure it is connected to the same network as HomeHub.",
             "Leave Pairing key blank for a first-time setup. During the connection test, accept the HomeHub pairing request shown on the TV.",
-            "Add the TV's MAC address if you want HomeHub to power it on while it is asleep.",
+            "HomeHub discovers and stores the TV's MAC address automatically for Wake-on-LAN when the TV is reachable on the local network.",
         ],
         "test_connection": True,
         "advanced_fields": ["client_key"],
@@ -84,10 +78,7 @@ class LGWebOSDriver(BaseDriver):
         client = WebOsClient(self._host(), key or None)
         await client.connect()
         if client.client_key and client.client_key != key:
-            from homehub.core.services.device_config import set_device_credentials
-
-            set_device_credentials(self.device, {"client_key": client.client_key})
-            self.config["client_key"] = client.client_key
+            self.stage_credentials({"client_key": client.client_key})
         return client
 
     def _state(self, client):
