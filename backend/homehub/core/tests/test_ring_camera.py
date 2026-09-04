@@ -1,6 +1,6 @@
 import asyncio
 from types import SimpleNamespace
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, patch
 
 from django.test import SimpleTestCase
 
@@ -17,54 +17,51 @@ class RingCameraSnapshotTests(SimpleTestCase):
         )
         return RingCameraDriver(device)
 
-    def test_async_snapshot_api_is_preferred(self):
+    @patch(
+        "homehub.core.integrations.security.ring.take_ring_snapshot",
+        new_callable=AsyncMock,
+    )
+    def test_camera_frame_uses_reliable_snapshot_helper(self, take_snapshot):
         driver = self.driver()
-        snapshot = AsyncMock(return_value=b"jpeg-data")
-        ring_device = SimpleNamespace(async_get_snapshot=snapshot)
+        take_snapshot.return_value = b"jpeg-data"
+        ring_device = SimpleNamespace()
+        ring = SimpleNamespace(auth=None)
         driver._device = AsyncMock(
-            return_value=(ring_device, "doorbots", SimpleNamespace(auth=None))
+            return_value=(ring_device, "doorbots", ring)
         )
 
         result = asyncio.run(driver.camera_frame())
 
         self.assertEqual(result, (b"jpeg-data", "image/jpeg"))
-        snapshot.assert_awaited_once_with(retries=10, delay=1)
-
-    def test_deprecated_sync_snapshot_runs_in_worker_thread(self):
-        driver = self.driver()
-        running_loop_seen = {"value": None}
-
-        def sync_snapshot():
-            try:
-                asyncio.get_running_loop()
-                running_loop_seen["value"] = True
-            except RuntimeError:
-                running_loop_seen["value"] = False
-            return b"jpeg-data"
-
-        ring_device = SimpleNamespace(get_snapshot=sync_snapshot)
-        driver._device = AsyncMock(
-            return_value=(ring_device, "doorbots", SimpleNamespace(auth=None))
+        take_snapshot.assert_awaited_once_with(
+            ring,
+            ring_device,
+            max_age=30,
+            max_wait=12,
         )
 
-        result = asyncio.run(driver.camera_frame())
-
-        self.assertEqual(result, (b"jpeg-data", "image/jpeg"))
-        self.assertFalse(running_loop_seen["value"])
-
-
-    def test_missing_fresh_snapshot_is_reported_as_ring_error(self):
+    @patch(
+        "homehub.core.integrations.security.ring.take_ring_snapshot",
+        new_callable=AsyncMock,
+    )
+    def test_snapshot_helper_errors_are_exposed_as_integration_errors(
+        self,
+        take_snapshot,
+    ):
         driver = self.driver()
-        snapshot = AsyncMock(return_value=None)
-        ring_device = SimpleNamespace(async_get_snapshot=snapshot)
+        take_snapshot.side_effect = RuntimeError(
+            "Ring did not produce a snapshot before its server-side timeout."
+        )
         driver._device = AsyncMock(
-            return_value=(ring_device, "doorbots", SimpleNamespace(auth=None))
+            return_value=(
+                SimpleNamespace(),
+                "doorbots",
+                SimpleNamespace(auth=None),
+            )
         )
 
         with self.assertRaisesRegex(
             IntegrationError,
-            "accepted the snapshot request but did not publish a fresh image",
+            "server-side timeout",
         ):
             asyncio.run(driver.camera_frame())
-
-        snapshot.assert_awaited_once_with(retries=10, delay=1)
