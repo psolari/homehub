@@ -228,7 +228,8 @@ class DeviceViewSet(OpenViewSet):
             return Response({"error": str(exc)}, status=status.HTTP_502_BAD_GATEWAY)
         if not frame:
             return Response(
-                {"error": "No camera frame is available"}, status=status.HTTP_404_NOT_FOUND
+                {"error": "The camera did not return an image."},
+                status=status.HTTP_502_BAD_GATEWAY,
             )
         data, content_type = frame
         response = HttpResponse(data, content_type=content_type)
