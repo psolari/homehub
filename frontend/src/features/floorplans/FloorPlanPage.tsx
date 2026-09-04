@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import type { PointerEvent as ReactPointerEvent } from "react";
+import type { PointerEvent as ReactPointerEvent, ReactNode } from "react";
 import { get, patch, post, remove } from "../../shared/api/client";
 import type { Device, FloorPlan, FloorPlanObject, FloorPlanObjectType, Room } from "../../shared/types";
 import { deviceIsActive, statusTone } from "../../shared/deviceState";
@@ -920,7 +920,7 @@ function DeviceFloorPlanGlyph({
     />
   );
 
-  let glyph: React.ReactNode;
+  let glyph: ReactNode;
 
   if (appearance === "tv") {
     glyph = (
