@@ -2,8 +2,8 @@ import { useEffect, useRef, useState } from "react";
 import * as mdi from "@mdi/js";
 import Icon from "@mdi/react";
 
-import { apiUrl, get, post } from "../../api/client";
-import type { Device } from "../../types";
+import { apiUrl, get, post } from "../api/client";
+import type { Device } from "../types";
 
 type LiveViewConfig = {
   supported: boolean;
