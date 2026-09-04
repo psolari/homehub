@@ -34,6 +34,49 @@ type Point = { x: number; y: number };
 const OPENING_TYPES = new Set<FloorPlanObjectType>(["door", "window", "radiator", "fireplace"]);
 const NON_RESIZABLE = new Set<FloorPlanObjectType>(["column", "plant", "lamp", "device"]);
 
+type DeviceAppearance =
+  | "auto"
+  | "tv"
+  | "robot_vacuum"
+  | "speaker"
+  | "thermostat"
+  | "camera"
+  | "doorbell"
+  | "light"
+  | "switch"
+  | "sensor"
+  | "security"
+  | "generic";
+
+const DEVICE_APPEARANCE_OPTIONS: { value: DeviceAppearance; label: string }[] = [
+  { value: "auto", label: "Automatic" },
+  { value: "tv", label: "Television" },
+  { value: "robot_vacuum", label: "Robot vacuum" },
+  { value: "speaker", label: "Smart speaker" },
+  { value: "thermostat", label: "Thermostat / heating" },
+  { value: "camera", label: "Camera" },
+  { value: "doorbell", label: "Video doorbell" },
+  { value: "light", label: "Light" },
+  { value: "switch", label: "Switch" },
+  { value: "sensor", label: "Sensor" },
+  { value: "security", label: "Security / alarm" },
+  { value: "generic", label: "Generic smart device" },
+];
+
+const DEVICE_APPEARANCE_SIZE: Record<Exclude<DeviceAppearance, "auto">, { width: number; height: number }> = {
+  tv: { width: 92, height: 64 },
+  robot_vacuum: { width: 66, height: 66 },
+  speaker: { width: 48, height: 66 },
+  thermostat: { width: 58, height: 58 },
+  camera: { width: 68, height: 50 },
+  doorbell: { width: 42, height: 68 },
+  light: { width: 52, height: 62 },
+  switch: { width: 58, height: 46 },
+  sensor: { width: 52, height: 52 },
+  security: { width: 60, height: 64 },
+  generic: { width: 62, height: 62 },
+};
+
 export default function FloorPlanPage() {
   const [plans, setPlans] = useState<FloorPlan[]>([]);
   const [planId, setPlanId] = useState<number | null>(null);
@@ -192,7 +235,11 @@ export default function FloorPlanPage() {
     setSelection({ kind: "room", id: room.id });
   };
 
-  const addObject = async (item: PaletteItem, device?: number) => {
+  const addObject = async (
+    item: PaletteItem,
+    device?: number,
+    extraProperties: Record<string, unknown> = {},
+  ) => {
     if (!plan) return;
     const object = await post<FloorPlanObject>("/floor-plan-objects/", {
       floor_plan: plan.id,
@@ -203,7 +250,10 @@ export default function FloorPlanPage() {
       height: item.height,
       rotation: 0,
       z_index: item.type === "rug" ? -10 : 10,
-      properties: item.type === "label" ? { label: "Label" } : {},
+      properties: {
+        ...(item.type === "label" ? { label: "Label" } : {}),
+        ...extraProperties,
+      },
       device: device || null,
     });
     setPlans((items) => items.map((current) => (current.id === plan.id ? { ...current, objects: [...current.objects, object] } : current)));
@@ -213,7 +263,19 @@ export default function FloorPlanPage() {
   const addDevice = async () => {
     const device = devices.find((item) => item.id === Number(newDeviceId));
     if (!device) return;
-    await addObject({ type: "device", label: device.name, category: "Living", width: 62, height: 62 }, device.id);
+    const appearance = inferredDeviceAppearance(device);
+    const size = DEVICE_APPEARANCE_SIZE[appearance];
+    await addObject(
+      {
+        type: "device",
+        label: device.name,
+        category: "Living",
+        width: size.width,
+        height: size.height,
+      },
+      device.id,
+      { device_appearance: "auto" },
+    );
     setNewDeviceId("");
   };
 
@@ -761,8 +823,239 @@ function ObjectGlyph({ object, active, tone, device, selected }: { object: Floor
   if (type === "barbecue") return <><rect x={x} y={y + h * .25} width={w} height={h * .55} rx="8" {...common} /><line x1={x + w * .2} y1={y + h * .8} x2={x + w * .15} y2={y + h} stroke="#71717a" strokeWidth="3" /><line x1={x + w * .8} y1={y + h * .8} x2={x + w * .85} y2={y + h} stroke="#71717a" strokeWidth="3" /></>;
   if (type === "column") return <rect x={x} y={y} width={w} height={h} rx="3" fill="#52525b" stroke={stroke} strokeWidth="3" />;
   if (type === "label") return <text x={x} y={y + h * .7} fill="#d4d4d8" fontSize={Math.max(12, h * .55)}>{String(object.properties?.label || "Label")}</text>;
-  if (type === "device") return <><rect x={x} y={y} width={w} height={h} rx="16" fill={active ? "#064e3b" : "#27272a"} stroke={active ? "#34d399" : stroke} strokeWidth="3" /><circle cx={x + w - 10} cy={y + 10} r="4" fill={active ? "#34d399" : "#71717a"} /><text x={x + w / 2} y={y + h / 2 - 2} textAnchor="middle" fill="#f4f4f5" fontSize="10">{device?.name || "Device"}</text><text x={x + w / 2} y={y + h / 2 + 13} textAnchor="middle" fill="#71717a" fontSize="8">{device?.device_type || "smart"}</text></>;
+  if (type === "device") {
+    return (
+      <DeviceFloorPlanGlyph
+        object={object}
+        device={device}
+        active={active}
+        tone={tone}
+        selected={selected}
+      />
+    );
+  }
   return <><rect x={x} y={y} width={w} height={h} rx="5" {...common} /><text x={x + w / 2} y={y + h / 2 + 4} textAnchor="middle" fill="#a1a1aa" fontSize="10">{shortLabel(type)}</text></>;
+}
+
+function inferredDeviceAppearance(device?: Device): Exclude<DeviceAppearance, "auto"> {
+  if (!device) return "generic";
+  const model = String(device.model || "").toLowerCase();
+  const type = String(device.device_type || "").toLowerCase();
+  const name = String(device.name || "").toLowerCase();
+  const hardware = String(device.hardware_model || "").toLowerCase();
+  const family = String(device.config?.family || device.discovery_data?.family || "").toLowerCase();
+
+  if (type === "vacuum" || model.includes("roomba") || model.includes("irobot")) return "robot_vacuum";
+  if (type === "tv" || model.includes("webos") || model.includes("tizen")) return "tv";
+  if (type === "thermostat" || model.includes("hive")) return "thermostat";
+  if (
+    type === "camera" &&
+    (name.includes("doorbell") || hardware.includes("doorbell") || family.includes("door"))
+  ) return "doorbell";
+  if (type === "camera") return "camera";
+  if (type === "speaker") return "speaker";
+  if (type === "light") return "light";
+  if (type === "switch") return "switch";
+  if (type === "sensor") return "sensor";
+  if (type === "security") return "security";
+  return "generic";
+}
+
+function resolvedDeviceAppearance(
+  object: FloorPlanObject,
+  device?: Device,
+): Exclude<DeviceAppearance, "auto"> {
+  const configured = String(object.properties?.device_appearance || "auto") as DeviceAppearance;
+  return configured === "auto" ? inferredDeviceAppearance(device) : configured;
+}
+
+function deviceAppearanceLabel(appearance: Exclude<DeviceAppearance, "auto">) {
+  return (
+    DEVICE_APPEARANCE_OPTIONS.find((option) => option.value === appearance)?.label ||
+    "Generic smart device"
+  );
+}
+
+function DeviceFloorPlanGlyph({
+  object,
+  device,
+  active,
+  tone,
+  selected,
+}: {
+  object: FloorPlanObject;
+  device?: Device;
+  active: boolean;
+  tone: string;
+  selected: boolean;
+}) {
+  const { x, y, width: w, height: h } = object;
+  const appearance = resolvedDeviceAppearance(object, device);
+  const stateFill =
+    tone === "active" ? "#064e3b" : tone === "error" ? "#450a0a" : "#27272a";
+  const stateStroke =
+    tone === "active"
+      ? "#34d399"
+      : tone === "error"
+        ? "#f87171"
+        : selected
+          ? "#22d3ee"
+          : "#71717a";
+  const detailStroke = tone === "active" ? "#6ee7b7" : "#a1a1aa";
+  const stateDot =
+    tone === "active" ? "#34d399" : tone === "error" ? "#f87171" : "#71717a";
+  const cx = x + w / 2;
+  const cy = y + h / 2;
+  const label = device?.name || "Device";
+  const labelY = y + h + 13;
+
+  const statusDot = (
+    <circle
+      cx={x + w - 6}
+      cy={y + 7}
+      r="4"
+      fill={stateDot}
+      stroke="#18181b"
+      strokeWidth="1.5"
+    />
+  );
+
+  let glyph: React.ReactNode;
+
+  if (appearance === "tv") {
+    glyph = (
+      <>
+        <rect x={x + 3} y={y + 3} width={w - 6} height={h * 0.68} rx="5" fill={stateFill} stroke={stateStroke} strokeWidth="3" />
+        <rect x={x + 9} y={y + 9} width={w - 18} height={Math.max(14, h * 0.48)} rx="2" fill="#111827" stroke={detailStroke} strokeWidth="1.5" opacity=".9" />
+        <line x1={cx} y1={y + h * 0.72} x2={cx} y2={y + h * 0.86} stroke={stateStroke} strokeWidth="3" />
+        <line x1={x + w * 0.35} y1={y + h * 0.88} x2={x + w * 0.65} y2={y + h * 0.88} stroke={stateStroke} strokeWidth="3" strokeLinecap="round" />
+        {statusDot}
+      </>
+    );
+  } else if (appearance === "robot_vacuum") {
+    const radius = Math.min(w, h) * 0.41;
+    glyph = (
+      <>
+        <circle cx={cx} cy={cy} r={radius} fill={stateFill} stroke={stateStroke} strokeWidth="3" />
+        <path d={`M ${cx - radius * 0.72} ${cy + radius * 0.12} Q ${cx} ${cy + radius * 0.55} ${cx + radius * 0.72} ${cy + radius * 0.12}`} fill="none" stroke={detailStroke} strokeWidth="2" />
+        <circle cx={cx} cy={cy - radius * 0.27} r={Math.max(3, radius * 0.12)} fill={detailStroke} />
+        <line x1={cx} y1={cy - radius * 0.92} x2={cx} y2={cy - radius * 0.65} stroke={detailStroke} strokeWidth="3" strokeLinecap="round" />
+        {statusDot}
+      </>
+    );
+  } else if (appearance === "speaker") {
+    glyph = (
+      <>
+        <rect x={x + w * 0.12} y={y + 2} width={w * 0.76} height={h - 4} rx={Math.min(14, w * 0.28)} fill={stateFill} stroke={stateStroke} strokeWidth="3" />
+        <circle cx={cx} cy={y + h * 0.38} r={Math.min(w, h) * 0.13} fill="#18181b" stroke={detailStroke} strokeWidth="2" />
+        <circle cx={cx} cy={y + h * 0.69} r={Math.min(w, h) * 0.2} fill="#18181b" stroke={detailStroke} strokeWidth="2" />
+        {statusDot}
+      </>
+    );
+  } else if (appearance === "thermostat") {
+    const radius = Math.min(w, h) * 0.4;
+    const temperature = device?.state?.temperature ?? device?.state?.target_temperature;
+    glyph = (
+      <>
+        <circle cx={cx} cy={cy} r={radius} fill={stateFill} stroke={stateStroke} strokeWidth="3" />
+        <circle cx={cx} cy={cy} r={radius * 0.7} fill="#18181b" stroke={detailStroke} strokeWidth="1.5" />
+        <text x={cx} y={cy + 4} textAnchor="middle" fill="#e4e4e7" fontSize="11" fontWeight="600">
+          {temperature != null ? `${Math.round(Number(temperature) * 10) / 10}°` : "°"}
+        </text>
+        {statusDot}
+      </>
+    );
+  } else if (appearance === "camera") {
+    glyph = (
+      <>
+        <rect x={x + 4} y={y + h * 0.2} width={w * 0.7} height={h * 0.58} rx="6" fill={stateFill} stroke={stateStroke} strokeWidth="3" />
+        <path d={`M ${x + w * 0.74} ${y + h * 0.32} L ${x + w - 4} ${y + h * 0.18} L ${x + w - 4} ${y + h * 0.82} L ${x + w * 0.74} ${y + h * 0.68} Z`} fill={stateFill} stroke={stateStroke} strokeWidth="2.5" />
+        <circle cx={x + w * 0.37} cy={cy} r={Math.min(w, h) * 0.13} fill="#111827" stroke={detailStroke} strokeWidth="2" />
+        {statusDot}
+      </>
+    );
+  } else if (appearance === "doorbell") {
+    glyph = (
+      <>
+        <rect x={x + w * 0.18} y={y + 2} width={w * 0.64} height={h - 4} rx={w * 0.22} fill={stateFill} stroke={stateStroke} strokeWidth="3" />
+        <circle cx={cx} cy={y + h * 0.3} r={w * 0.13} fill="#111827" stroke={detailStroke} strokeWidth="2" />
+        <circle cx={cx} cy={y + h * 0.68} r={w * 0.16} fill="none" stroke={detailStroke} strokeWidth="2.5" />
+        {statusDot}
+      </>
+    );
+  } else if (appearance === "light") {
+    const radius = Math.min(w, h) * 0.28;
+    glyph = (
+      <>
+        <circle cx={cx} cy={y + h * 0.38} r={radius} fill={active ? "#365314" : stateFill} stroke={stateStroke} strokeWidth="3" />
+        <path d={`M ${cx - radius * 0.45} ${y + h * 0.57} L ${cx - radius * 0.28} ${y + h * 0.76} L ${cx + radius * 0.28} ${y + h * 0.76} L ${cx + radius * 0.45} ${y + h * 0.57}`} fill={stateFill} stroke={stateStroke} strokeWidth="2" />
+        <line x1={cx - radius * 0.25} y1={y + h * 0.82} x2={cx + radius * 0.25} y2={y + h * 0.82} stroke={detailStroke} strokeWidth="3" strokeLinecap="round" />
+        {statusDot}
+      </>
+    );
+  } else if (appearance === "switch") {
+    glyph = (
+      <>
+        <rect x={x + 2} y={y + h * 0.16} width={w - 4} height={h * 0.68} rx={h * 0.3} fill={stateFill} stroke={stateStroke} strokeWidth="3" />
+        <circle
+          cx={active ? x + w * 0.7 : x + w * 0.3}
+          cy={cy}
+          r={Math.min(w, h) * 0.2}
+          fill={active ? "#34d399" : "#a1a1aa"}
+        />
+        {statusDot}
+      </>
+    );
+  } else if (appearance === "sensor") {
+    glyph = (
+      <>
+        <circle cx={cx} cy={cy} r={Math.min(w, h) * 0.38} fill={stateFill} stroke={stateStroke} strokeWidth="3" />
+        <circle cx={cx} cy={cy} r={Math.min(w, h) * 0.09} fill={detailStroke} />
+        <path d={`M ${cx - w * 0.18} ${cy - h * 0.18} Q ${cx} ${cy - h * 0.33} ${cx + w * 0.18} ${cy - h * 0.18} M ${cx - w * 0.18} ${cy + h * 0.18} Q ${cx} ${cy + h * 0.33} ${cx + w * 0.18} ${cy + h * 0.18}`} fill="none" stroke={detailStroke} strokeWidth="2" />
+        {statusDot}
+      </>
+    );
+  } else if (appearance === "security") {
+    glyph = (
+      <>
+        <path
+          d={`M ${cx} ${y + 3} L ${x + w * 0.82} ${y + h * 0.18} L ${x + w * 0.72} ${y + h * 0.67} Q ${cx} ${y + h - 3} ${x + w * 0.28} ${y + h * 0.67} L ${x + w * 0.18} ${y + h * 0.18} Z`}
+          fill={stateFill}
+          stroke={stateStroke}
+          strokeWidth="3"
+        />
+        <circle cx={cx} cy={cy - 2} r={Math.min(w, h) * 0.1} fill={detailStroke} />
+        {statusDot}
+      </>
+    );
+  } else {
+    glyph = (
+      <>
+        <rect x={x + 3} y={y + 3} width={w - 6} height={h - 6} rx="14" fill={stateFill} stroke={stateStroke} strokeWidth="3" />
+        <circle cx={cx} cy={cy} r={Math.min(w, h) * 0.17} fill="none" stroke={detailStroke} strokeWidth="2.5" />
+        <path d={`M ${cx} ${cy - h * 0.26} V ${cy - h * 0.12} M ${cx} ${cy + h * 0.12} V ${cy + h * 0.26} M ${cx - w * 0.26} ${cy} H ${cx - w * 0.12} M ${cx + w * 0.12} ${cy} H ${cx + w * 0.26}`} stroke={detailStroke} strokeWidth="2.5" strokeLinecap="round" />
+        {statusDot}
+      </>
+    );
+  }
+
+  return (
+    <>
+      <title>{`${label} — ${String(device?.state?.status || device?.status || "unknown")}`}</title>
+      {glyph}
+      <text
+        x={cx}
+        y={labelY}
+        textAnchor="middle"
+        fill="#d4d4d8"
+        fontSize="9"
+        fontWeight="500"
+        pointerEvents="none"
+      >
+        {label.length > 22 ? `${label.slice(0, 20)}…` : label}
+      </text>
+    </>
+  );
 }
 
 function RoomInspector({ room, onChange, onDuplicate, onDelete }: { room: Room; onChange: (changes: Partial<Room>) => void; onDuplicate: () => void; onDelete: () => void }) {
@@ -779,7 +1072,37 @@ function RoomInspector({ room, onChange, onDuplicate, onDelete }: { room: Room; 
 function ObjectInspector({ object, device, onChange, onDuplicate, onDelete, onOpenDevice }: { object: FloorPlanObject; device?: Device; onChange: (changes: Partial<FloorPlanObject>) => void; onDuplicate: () => void; onDelete: () => void; onOpenDevice: () => void }) {
   return <div className="space-y-4">
     <div><div className="text-[10px] uppercase tracking-[.2em] text-cyan-500">{object.object_type.replaceAll("_", " ")}</div><div className="mt-1 text-lg font-semibold text-white">{device?.name || shortLabel(object.object_type)}</div></div>
-    {device && <button onClick={onOpenDevice} className="w-full rounded-lg bg-cyan-700 px-3 py-2 text-sm font-semibold">Open device controls</button>}
+    {device && <>
+      <button onClick={onOpenDevice} className="w-full rounded-lg bg-cyan-700 px-3 py-2 text-sm font-semibold">Open device controls</button>
+      <label className="block text-xs text-zinc-500">
+        Floor-plan appearance
+        <select
+          value={String(object.properties?.device_appearance || "auto")}
+          onChange={(event) => {
+            const appearance = event.target.value as DeviceAppearance;
+            const resolved = appearance === "auto" ? inferredDeviceAppearance(device) : appearance;
+            const size = DEVICE_APPEARANCE_SIZE[resolved];
+            onChange({
+              width: size.width,
+              height: size.height,
+              properties: { ...object.properties, device_appearance: appearance },
+            });
+          }}
+          className="mt-1 w-full rounded-lg border border-zinc-700 bg-zinc-950 p-2 text-sm text-white"
+        >
+          {DEVICE_APPEARANCE_OPTIONS.map((option) => (
+            <option key={option.value} value={option.value}>
+              {option.value === "auto"
+                ? `Automatic (${deviceAppearanceLabel(inferredDeviceAppearance(device))})`
+                : option.label}
+            </option>
+          ))}
+        </select>
+        <span className="mt-1.5 block text-[11px] leading-4 text-zinc-600">
+          This only changes how the linked device is drawn on this floor plan. Device controls and live state are unchanged.
+        </span>
+      </label>
+    </>}
     {object.object_type === "label" && <label className="block text-xs text-zinc-500">Text<input value={String(object.properties?.label || "")} onChange={(event) => onChange({ properties: { ...object.properties, label: event.target.value } })} className="mt-1 w-full rounded-lg border border-zinc-700 bg-zinc-950 p-2 text-sm text-white" /></label>}
     {object.object_type !== "wall" && <div className="grid grid-cols-2 gap-2"><NumberField label="Width" value={object.width} onChange={(value) => onChange({ width: value })} /><NumberField label="Height" value={object.height} onChange={(value) => onChange({ height: value })} /></div>}
     {object.object_type === "wall" && <div className="grid grid-cols-2 gap-2"><NumberField label="Length" value={object.width} onChange={(value) => onChange({ width: value })} /><NumberField label="Thickness" value={object.height} onChange={(value) => onChange({ height: value })} /></div>}
