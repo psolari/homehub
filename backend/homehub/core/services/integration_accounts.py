@@ -9,7 +9,11 @@ from homehub.core.models import IntegrationAccount
 from homehub.core.services.accounts import get_credentials, set_credentials
 from homehub.core.services.devices import run_async
 from homehub.core.services.hive_client import hive_devices, open_hive_session
-from homehub.core.services.ring_client import open_ring_session, ring_device_groups
+from homehub.core.services.ring_client import (
+    close_ring_session,
+    open_ring_session,
+    ring_device_groups,
+)
 
 
 class IntegrationAccountError(RuntimeError):
@@ -66,12 +70,15 @@ def _validate_ring(account: IntegrationAccount, credentials: dict[str, Any]) -> 
 
     async def validate():
         ring, token = await open_ring_session(credentials)
-        groups = ring_device_groups(ring)
-        return {
-            "message": "Ring account authenticated successfully.",
-            "provider_devices_seen": sum(len(values) for values in groups.values()),
-            "_token": token,
-        }
+        try:
+            groups = ring_device_groups(ring)
+            return {
+                "message": "Ring account authenticated successfully.",
+                "provider_devices_seen": sum(len(values) for values in groups.values()),
+                "_token": token,
+            }
+        finally:
+            await close_ring_session(ring)
 
     result = run_async(validate())
     token = result.pop("_token", None)
