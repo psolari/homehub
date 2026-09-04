@@ -76,6 +76,7 @@ export type DriverSetupDefinition = {
   description?: string;
   requires_ip?: boolean;
   requires_mac?: boolean;
+  auto_discover_mac?: boolean;
   instructions?: string[];
   account_provider?: string | null;
   account_field?: string | null;
