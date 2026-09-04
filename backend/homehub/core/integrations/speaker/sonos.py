@@ -55,9 +55,8 @@ class SonosDriver(BaseDriver):
         Control("pause", "Pause", group="playback"),
         Control("next", "Next", group="playback"),
         Control("previous", "Previous", group="playback"),
-        Control("volume", "Volume", type="range", group="audio", parameter="value", minimum=0, maximum=100, step=1),
-        Control("mute", "Mute", group="audio"),
-        Control("unmute", "Unmute", group="audio"),
+        Control("volume", "Volume", type="range", group="audio", state_key="volume", parameter="value", minimum=0, maximum=100, step=1, icon="volume"),
+        Control("mute", "Mute", type="toggle", group="audio", state_key="muted", parameter="value", icon="volume-mute"),
         Control(
             "source",
             "Input",
@@ -122,15 +121,14 @@ class SonosDriver(BaseDriver):
         await self.to_thread(setattr, speaker, "volume", value)
         return {"volume": value}
 
-    async def action_mute(self):
+    async def action_mute(self, value=True):
         speaker = self._speaker()
-        await self.to_thread(setattr, speaker, "mute", True)
-        return {"muted": True}
+        muted = bool(value)
+        await self.to_thread(setattr, speaker, "mute", muted)
+        return {"muted": muted}
 
     async def action_unmute(self):
-        speaker = self._speaker()
-        await self.to_thread(setattr, speaker, "mute", False)
-        return {"muted": False}
+        return await self.action_mute(False)
 
     async def action_play_uri(self, uri):
         return await self.to_thread(self._speaker().play_uri, uri)
