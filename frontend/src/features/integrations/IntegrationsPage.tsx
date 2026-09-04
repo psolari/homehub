@@ -699,7 +699,7 @@ export default function IntegrationsPage() {
                   })}
                 </div>
 
-                {selectedAccount?.error && (
+                {selectedAccount?.error && selectedAccount.error !== error && (
                   <div className="mt-4 rounded-xl border border-red-900/60 bg-red-950/30 p-3 text-xs leading-5 text-red-300">
                     {selectedAccount.error}
                   </div>
