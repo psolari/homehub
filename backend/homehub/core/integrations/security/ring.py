@@ -50,10 +50,8 @@ class RingCameraDriver(BaseDriver):
         "advanced_fields": ["family"],
     }
     controls = [
-        Control("lights_on", "Lights on", group="security"),
-        Control("lights_off", "Lights off", group="security"),
-        Control("siren_on", "Siren on", group="security"),
-        Control("siren_off", "Siren off", group="security"),
+        Control("lights", "Lights", type="toggle", group="security", state_key="lights", parameter="value", icon="light"),
+        Control("siren", "Siren", type="toggle", group="security", state_key="siren", parameter="value", icon="siren"),
         Control("snapshot", "Refresh camera", group="camera"),
     ]
 
@@ -130,17 +128,23 @@ class RingCameraDriver(BaseDriver):
                 return await result if hasattr(result, "__await__") else result
         raise IntegrationError(f"Ring operation is not available: {names[0]}")
 
+    async def action_lights(self, value):
+        return await self._set(("async_set_lights", "set_lights"), bool(value))
+
     async def action_lights_on(self):
-        return await self._set(("async_set_lights", "set_lights"), True)
+        return await self.action_lights(True)
 
     async def action_lights_off(self):
-        return await self._set(("async_set_lights", "set_lights"), False)
+        return await self.action_lights(False)
+
+    async def action_siren(self, value):
+        return await self._set(("async_set_siren", "set_siren"), bool(value))
 
     async def action_siren_on(self):
-        return await self._set(("async_set_siren", "set_siren"), True)
+        return await self.action_siren(True)
 
     async def action_siren_off(self):
-        return await self._set(("async_set_siren", "set_siren"), False)
+        return await self.action_siren(False)
 
     async def action_snapshot(self):
         return {"available": (await self.camera_frame()) is not None}
