@@ -1,6 +1,6 @@
 from django.urls import include, path
 from rest_framework import routers
-from homehub.core.views import CloudDiscoveryView, DashboardCardViewSet, DeviceCatalogView, DeviceViewSet, DiscoveryView, FloorPlanObjectViewSet, FloorPlanViewSet, IntegrationAccountViewSet, ProviderCatalogView, SpotifyPlayerViewSet, RoomViewSet, UserViewSet, health, spotify_callback
+from homehub.core.views import CloudDiscoveryView, DashboardCardViewSet, DashboardGroupViewSet, DeviceCatalogView, DeviceViewSet, DiscoveryView, FloorPlanObjectViewSet, FloorPlanViewSet, IntegrationAccountViewSet, ProviderCatalogView, SpotifyPlayerViewSet, RoomViewSet, UserViewSet, health, spotify_callback
 
 router=routers.DefaultRouter()
 router.register(r"users",UserViewSet,basename="user"); router.register(r"floor-plans",FloorPlanViewSet,basename="floor-plan"); router.register(r"floor-plan-objects",FloorPlanObjectViewSet,basename="floor-plan-object"); router.register(r"rooms",RoomViewSet,basename="room"); router.register(r"devices",DeviceViewSet,basename="device"); router.register(r"dashboard-cards",DashboardCardViewSet,basename="dashboard-card"); router.register(r"dashboard-groups",DashboardGroupViewSet,basename="dashboard-group"); router.register(r"integration-accounts",IntegrationAccountViewSet,basename="integration-account"); router.register(r"spotify",SpotifyPlayerViewSet,basename="spotify")
