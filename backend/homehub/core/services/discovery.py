@@ -7,6 +7,7 @@ from dataclasses import asdict, dataclass
 from typing import Any
 
 from homehub.core.models import Device
+from homehub.core.services.network import resolve_mac_address
 
 
 @dataclass
@@ -79,6 +80,11 @@ def _probe_host(ip: str) -> list[Candidate]:
                 discovery_data={"method": "tcp_probe", "port": port},
             )
         )
+    if matches:
+        mac = resolve_mac_address(ip, prime=False)
+        if mac:
+            for candidate in matches:
+                candidate.mac_address = mac
     return matches
 
 
