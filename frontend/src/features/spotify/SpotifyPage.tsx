@@ -71,6 +71,7 @@ type SpotifyHome = {
 type SearchResults = {
   tracks: SpotifyMedia[];
   albums: SpotifyMedia[];
+  artists: SpotifyMedia[];
   playlists: SpotifyMedia[];
   shows: SpotifyMedia[];
   episodes: SpotifyMedia[];
@@ -244,8 +245,8 @@ export default function SpotifyPage() {
       });
     });
 
-  const search = async () => {
-    const trimmed = query.trim();
+  const searchFor = async (term: string) => {
+    const trimmed = term.trim();
     if (!trimmed) return;
     setSearching(true);
     setError("");
@@ -261,6 +262,8 @@ export default function SpotifyPage() {
       setSearching(false);
     }
   };
+
+  const search = async () => searchFor(query);
 
   const openShow = async (show: SpotifyMedia) => {
     if (!show.id) return;
@@ -476,8 +479,7 @@ export default function SpotifyPage() {
             type="button"
             onClick={() => {
               setQuery("radio");
-              setTab("search");
-              window.setTimeout(() => void search(), 0);
+              void searchFor("radio");
             }}
             className="inline-flex items-center gap-2 rounded-xl border border-zinc-700 bg-zinc-900 px-4 py-3 text-sm text-zinc-300 hover:border-emerald-700 hover:text-white"
           >
@@ -506,6 +508,13 @@ export default function SpotifyPage() {
               <MediaSection
                 title="Playlists"
                 items={results.playlists}
+                onPlay={play}
+                onOpenShow={openShow}
+                busy={busy}
+              />
+              <MediaSection
+                title="Artists"
+                items={results.artists}
                 onPlay={play}
                 onOpenShow={openShow}
                 busy={busy}
