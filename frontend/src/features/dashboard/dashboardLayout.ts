@@ -156,3 +156,27 @@ export function dashboardGridHeight(cards: DashboardRect[]) {
     ...cards.map((card) => card.grid_y + card.grid_h),
   );
 }
+
+
+export function findFreeDashboardPosition(
+  card: DashboardRect,
+  occupied: DashboardRect[],
+  columns = DASHBOARD_COLUMNS,
+): DashboardRect {
+  const base = clampDashboardRect(card, columns);
+
+  for (let y = 0; y < 200; y += 1) {
+    for (let x = 0; x <= columns - base.grid_w; x += 1) {
+      const candidate = {
+        ...base,
+        grid_x: x,
+        grid_y: y,
+      };
+      if (!collidingDashboardCards(candidate, occupied).length) {
+        return candidate;
+      }
+    }
+  }
+
+  return base;
+}
