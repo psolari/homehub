@@ -9,6 +9,7 @@ from homehub.core.models import IntegrationAccount
 from homehub.core.services.accounts import get_credentials, set_credentials
 from homehub.core.services.devices import run_async
 from homehub.core.services.hive_client import hive_devices, open_hive_session
+from homehub.core.services.ring_client import open_ring_session, ring_device_groups
 
 
 class IntegrationAccountError(RuntimeError):
@@ -62,48 +63,20 @@ def _validate_alexa(credentials: dict[str, Any]) -> dict[str, Any]:
 
 def _validate_ring(account: IntegrationAccount, credentials: dict[str, Any]) -> dict[str, Any]:
     _require(credentials, "username", "password")
-    token_update: dict[str, Any] = {}
 
     async def validate():
-        from ring_doorbell import Auth, Ring
-        from ring_doorbell.exceptions import Requires2FAError
-
-        def token_updated(token):
-            token_update["token"] = token
-
-        auth = Auth("HomeHub/1.0", credentials.get("token"), token_updated)
-        try:
-            if not credentials.get("token"):
-                await auth.async_fetch_token(
-                    credentials["username"],
-                    credentials["password"],
-                    credentials.get("otp"),
-                )
-        except Requires2FAError as exc:
-            raise IntegrationAccountError(
-                "Ring requires a fresh two-factor authentication code. Enter it and try again."
-            ) from exc
-
-        ring = Ring(auth)
-        if hasattr(ring, "async_create_session"):
-            await ring.async_create_session()
-        if hasattr(ring, "async_update_data"):
-            await ring.async_update_data()
-        devices = ring.devices()
-        if hasattr(devices, "__await__"):
-            devices = await devices
-
-        count = 0
-        if isinstance(devices, dict):
-            count = sum(len(values or []) for values in devices.values())
+        ring, token = await open_ring_session(credentials)
+        groups = ring_device_groups(ring)
         return {
             "message": "Ring account authenticated successfully.",
-            "provider_devices_seen": count,
+            "provider_devices_seen": sum(len(values) for values in groups.values()),
+            "_token": token,
         }
 
     result = run_async(validate())
-    if token_update.get("token"):
-        set_credentials(account, {"token": token_update["token"]})
+    token = result.pop("_token", None)
+    if token:
+        set_credentials(account, {"token": token})
     return result
 
 
