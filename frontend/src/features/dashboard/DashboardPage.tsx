@@ -25,6 +25,7 @@ import Modal from "../../shared/components/Modal";
 import {
   DASHBOARD_COLUMNS,
   dashboardGridHeight,
+  findFreeDashboardPosition,
   resolveDashboardMove,
   resolveDashboardResize,
   type DashboardRect,
@@ -210,18 +211,21 @@ export default function DashboardPage() {
 
     setLayoutSaving(true);
     try {
-      const saved = await Promise.all(
-        changed.map((card) =>
-          patch<DashboardCard>(`/dashboard-cards/${card.id}/`, {
+      const response = await post<{ cards: DashboardCard[] }>(
+        "/dashboard-cards/layout/",
+        {
+          cards: changed.map((card) => ({
+            id: card.id,
             grid_x: card.grid_x,
             grid_y: card.grid_y,
             grid_w: card.grid_w,
             grid_h: card.grid_h,
-          }),
-        ),
+          })),
+        },
       );
-
-      const savedById = new Map(saved.map((card) => [card.id, card]));
+      const savedById = new Map(
+        response.cards.map((card) => [card.id, card]),
+      );
       setDevices((items) =>
         items.map((device) => {
           const card = device.dashboard_card;
@@ -692,6 +696,7 @@ export default function DashboardPage() {
         open={!!customise}
         device={customise}
         groups={groups}
+        devices={devices}
         onClose={() => setCustomise(null)}
         onSaved={(device) => {
           updateDevice(device);
@@ -703,6 +708,7 @@ export default function DashboardPage() {
         open={groupEditor != null}
         group={groupEditor}
         groups={groups}
+        devices={devices}
         onClose={() => setGroupEditor(null)}
         onSaved={(group) => {
           setGroups((items) => {
@@ -713,20 +719,15 @@ export default function DashboardPage() {
           });
           setGroupEditor(null);
         }}
-        onDeleted={(groupId) => {
+        onDeleted={(groupId, movedCards) => {
           setGroups((items) => items.filter((item) => item.id !== groupId));
+          const byId = new Map(movedCards.map((card) => [card.id, card]));
           setDevices((items) =>
-            items.map((device) =>
-              device.dashboard_card?.group === groupId
-                ? {
-                    ...device,
-                    dashboard_card: {
-                      ...device.dashboard_card,
-                      group: null,
-                    },
-                  }
-                : device,
-            ),
+            items.map((device) => {
+              const card = device.dashboard_card;
+              const next = card ? byId.get(card.id) : undefined;
+              return next ? { ...device, dashboard_card: next } : device;
+            }),
           );
           setGroupEditor(null);
         }}
@@ -847,12 +848,14 @@ function CardSettings({
   open,
   device,
   groups,
+  devices,
   onClose,
   onSaved,
 }: {
   open: boolean;
   device: Device | null;
   groups: DashboardGroup[];
+  devices: Device[];
   onClose: () => void;
   onSaved: (device: Device) => void;
 }) {
@@ -877,21 +880,63 @@ function CardSettings({
   const save = async () => {
     if (!device.dashboard_card) return;
 
+    const currentCard = device.dashboard_card;
     const groupId = group ? Number(group) : null;
-    const card = await patch<DashboardCard>(
-      `/dashboard-cards/${device.dashboard_card.id}/`,
-      {
-        group: groupId,
-        visible_controls: visible,
-        // Moving between groups starts at the first snapped slot. The user can
-        // then drag it anywhere in Edit layout mode.
-        ...(groupId !== (device.dashboard_card.group ?? null)
-          ? { grid_x: 0, grid_y: 0 }
-          : {}),
-      },
+
+    let saved = await patch<DashboardCard>(
+      `/dashboard-cards/${currentCard.id}/`,
+      { visible_controls: visible },
     );
 
-    onSaved({ ...device, dashboard_card: card });
+    if (groupId !== (currentCard.group ?? null)) {
+      const occupied = devices
+        .filter(
+          (item) =>
+            item.dashboard_card &&
+            item.dashboard_card.id !== currentCard.id &&
+            (item.dashboard_card.group ?? null) === groupId,
+        )
+        .map((item) => {
+          const card = item.dashboard_card!;
+          return {
+            id: card.id,
+            grid_x: card.grid_x,
+            grid_y: card.grid_y,
+            grid_w: card.grid_w,
+            grid_h: card.grid_h,
+          };
+        });
+
+      const slot = findFreeDashboardPosition(
+        {
+          id: currentCard.id,
+          grid_x: currentCard.grid_x,
+          grid_y: currentCard.grid_y,
+          grid_w: currentCard.grid_w,
+          grid_h: currentCard.grid_h,
+        },
+        occupied,
+      );
+
+      const layout = await post<{ cards: DashboardCard[] }>(
+        "/dashboard-cards/layout/",
+        {
+          cards: [
+            {
+              id: currentCard.id,
+              group: groupId,
+              grid_x: slot.grid_x,
+              grid_y: slot.grid_y,
+              grid_w: slot.grid_w,
+              grid_h: slot.grid_h,
+            },
+          ],
+        },
+      );
+      saved = layout.cards[0] || saved;
+    }
+
+    onSaved({ ...device, dashboard_card: saved });
   };
 
   return (
@@ -968,6 +1013,7 @@ function GroupEditor({
   open,
   group,
   groups,
+  devices,
   onClose,
   onSaved,
   onDeleted,
@@ -975,9 +1021,10 @@ function GroupEditor({
   open: boolean;
   group: DashboardGroup | "new" | null;
   groups: DashboardGroup[];
+  devices: Device[];
   onClose: () => void;
   onSaved: (group: DashboardGroup) => void;
-  onDeleted: (groupId: number) => void;
+  onDeleted: (groupId: number, movedCards: DashboardCard[]) => void;
 }) {
   const [name, setName] = useState("");
 
@@ -1014,8 +1061,61 @@ function GroupEditor({
 
   const deleteGroup = async () => {
     if (group === "new") return;
+
+    const occupied: DashboardRect[] = devices
+      .filter(
+        (device) =>
+          device.dashboard_card &&
+          (device.dashboard_card.group ?? null) === null,
+      )
+      .map((device) => {
+        const card = device.dashboard_card!;
+        return {
+          id: card.id,
+          grid_x: card.grid_x,
+          grid_y: card.grid_y,
+          grid_w: card.grid_w,
+          grid_h: card.grid_h,
+        };
+      });
+
+    const updates: Array<DashboardRect & { group: null }> = [];
+    const moving = devices
+      .filter((device) => device.dashboard_card?.group === group.id)
+      .map((device) => device.dashboard_card!)
+      .sort(
+        (left, right) =>
+          left.grid_y - right.grid_y ||
+          left.grid_x - right.grid_x ||
+          left.id - right.id,
+      );
+
+    for (const card of moving) {
+      const slot = findFreeDashboardPosition(
+        {
+          id: card.id,
+          grid_x: card.grid_x,
+          grid_y: card.grid_y,
+          grid_w: card.grid_w,
+          grid_h: card.grid_h,
+        },
+        occupied,
+      );
+      occupied.push(slot);
+      updates.push({ ...slot, group: null });
+    }
+
+    let movedCards: DashboardCard[] = [];
+    if (updates.length) {
+      const response = await post<{ cards: DashboardCard[] }>(
+        "/dashboard-cards/layout/",
+        { cards: updates },
+      );
+      movedCards = response.cards;
+    }
+
     await remove<void>(`/dashboard-groups/${group.id}/`);
-    onDeleted(group.id);
+    onDeleted(group.id, movedCards);
   };
 
   return (
