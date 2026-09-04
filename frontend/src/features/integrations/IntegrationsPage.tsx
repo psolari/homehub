@@ -464,6 +464,17 @@ export default function IntegrationsPage() {
                         : "Fix connection"}
                   </button>
 
+                  {verified && key === "spotify" && (
+                    <button
+                      type="button"
+                      onClick={() => navigate("/spotify")}
+                      className="inline-flex items-center gap-2 rounded-lg border border-emerald-800 px-3 py-2 text-sm text-emerald-300 hover:bg-emerald-950/30 hover:text-emerald-200"
+                    >
+                      <Icon path={mdiPaths.mdiSpotify} size={0.65} />
+                      Open player
+                    </button>
+                  )}
+
                   {verified && definition.supports_device_discovery && (
                     <button
                       type="button"
