@@ -42,7 +42,9 @@ class RingCameraSnapshotTests(SimpleTestCase):
             return b"jpeg-data"
 
         ring_device = SimpleNamespace(get_snapshot=sync_snapshot)
-        driver._device = AsyncMock(return_value=(ring_device, "doorbots"))
+        driver._device = AsyncMock(
+            return_value=(ring_device, "doorbots", SimpleNamespace(auth=None))
+        )
 
         result = asyncio.run(driver.camera_frame())
 
