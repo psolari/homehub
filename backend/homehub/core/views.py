@@ -13,6 +13,7 @@ from homehub.core.integrations.providers import PROVIDER_SCHEMAS
 from homehub.core.integrations.registry import get_driver
 from homehub.core.models import (
     DashboardCard,
+    DashboardGroup,
     Device,
     FloorPlan,
     FloorPlanObject,
@@ -22,6 +23,7 @@ from homehub.core.models import (
 )
 from homehub.core.serializers import (
     DashboardCardSerializer,
+    DashboardGroupSerializer,
     DeviceLocationSerializer,
     DeviceSerializer,
     FloorPlanObjectSerializer,
@@ -79,8 +81,13 @@ class FloorPlanObjectViewSet(OpenViewSet):
         return queryset.filter(floor_plan_id=floor_plan) if floor_plan else queryset
 
 
+class DashboardGroupViewSet(OpenViewSet):
+    queryset = DashboardGroup.objects.all().order_by("order", "id")
+    serializer_class = DashboardGroupSerializer
+
+
 class DashboardCardViewSet(OpenViewSet):
-    queryset = DashboardCard.objects.select_related("device").all()
+    queryset = DashboardCard.objects.select_related("device", "group").all()
     serializer_class = DashboardCardSerializer
 
 
