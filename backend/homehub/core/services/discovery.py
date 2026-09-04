@@ -28,6 +28,69 @@ class Candidate:
         return {k: v for k, v in asdict(self).items() if v not in (None, "")}
 
 
+def _candidate_identity(candidate: Candidate) -> tuple[str, ...]:
+    """Return a stable physical identity for discovery de-duplication."""
+    model = candidate.model or candidate.device_type
+    if candidate.mac_address:
+        return ("mac", candidate.mac_address.lower(), model)
+    if candidate.ip_address:
+        return ("ip", candidate.ip_address, model)
+    return ("uid", candidate.unique_id)
+
+
+def _candidate_quality(candidate: Candidate) -> int:
+    method = str((candidate.discovery_data or {}).get("method") or "")
+    # Prefer native discovery, because it usually carries the canonical name,
+    # UUID/UID and model metadata. TCP probing is intentionally the fallback.
+    return 0 if method == "tcp_probe" else 10
+
+
+def _merge_candidate(preferred: Candidate, fallback: Candidate) -> Candidate:
+    """Keep the richer candidate while filling any useful missing fields."""
+    if _candidate_quality(fallback) > _candidate_quality(preferred):
+        preferred, fallback = fallback, preferred
+    for field in (
+        "name",
+        "manufacturer",
+        "hardware_model",
+        "ip_address",
+        "mac_address",
+        "config",
+        "discovery_data",
+    ):
+        if getattr(preferred, field) in (None, "", {}):
+            setattr(preferred, field, getattr(fallback, field))
+    return preferred
+
+
+def _dedupe_candidates(candidates: list[Candidate]) -> list[Candidate]:
+    by_identity: dict[tuple[str, ...], Candidate] = {}
+    for candidate in candidates:
+        identity = _candidate_identity(candidate)
+        if identity in by_identity:
+            by_identity[identity] = _merge_candidate(by_identity[identity], candidate)
+        else:
+            by_identity[identity] = candidate
+    return list(by_identity.values())
+
+
+def _is_already_configured(candidate: Candidate) -> bool:
+    queryset = Device.objects.all()
+    if candidate.unique_id and queryset.filter(unique_id=candidate.unique_id).exists():
+        return True
+    if candidate.ip_address and queryset.filter(
+        ip_address=candidate.ip_address,
+        model=candidate.model,
+    ).exists():
+        return True
+    if candidate.mac_address and queryset.filter(
+        mac_address__iexact=candidate.mac_address,
+        model=candidate.model,
+    ).exists():
+        return True
+    return False
+
+
 def local_ipv4() -> str:
     sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
     try:
@@ -166,12 +229,8 @@ def discover_network(cidr: str | None = None, *, max_hosts: int = 512) -> list[d
     candidates.extend(_discover_sonos())
     candidates.extend(_discover_cast())
 
-    existing = set(Device.objects.exclude(unique_id__isnull=True).values_list("unique_id", flat=True))
-    dedupe: dict[str, Candidate] = {}
-    for candidate in candidates:
-        if candidate.unique_id not in existing:
-            dedupe[candidate.unique_id] = candidate
-    return [item.as_dict() for item in dedupe.values()]
+    candidates = _dedupe_candidates(candidates)
+    return [candidate.as_dict() for candidate in candidates if not _is_already_configured(candidate)]
 
 
 def _discover_hive_account(account) -> list[Candidate]:
@@ -341,12 +400,15 @@ def discover_cloud_accounts() -> list[dict[str, Any]]:
         handler = handlers.get(account.provider)
         if handler:
             candidates.extend(handler(account))
-    existing = set(Device.objects.exclude(unique_id__isnull=True).values_list("unique_id", flat=True))
-    return [candidate.as_dict() for candidate in candidates if candidate.unique_id not in existing]
+    candidates = _dedupe_candidates(candidates)
+    return [candidate.as_dict() for candidate in candidates if not _is_already_configured(candidate)]
 
 
 def discover_all(cidr: str | None = None, *, include_cloud: bool = True) -> dict[str, Any]:
     local = discover_network(cidr)
     cloud = discover_cloud_accounts() if include_cloud else []
-    dedupe = {item["unique_id"]: item for item in [*local, *cloud]}
-    return {"network": cidr or default_network(), "devices": list(dedupe.values())}
+    # Local and cloud results can occasionally describe the same integration
+    # through different discovery routes. Prefer one physical device card.
+    combined = [Candidate(**item) for item in [*local, *cloud]]
+    devices = [candidate.as_dict() for candidate in _dedupe_candidates(combined)]
+    return {"network": cidr or default_network(), "devices": devices}
