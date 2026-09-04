@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import { get, patch, post } from "../../shared/api/client";
+import { apiUrl, get, patch, post } from "../../shared/api/client";
 import type { DashboardCard, Device } from "../../shared/types";
 import { deviceIsActive, statusTone, visibleControls } from "../../shared/deviceState";
 import ControlPanel from "../../shared/components/ControlPanel";
@@ -103,6 +103,12 @@ export default function DashboardPage() {
                     }`}
                   />
                 </div>
+                {(device.device_type === "camera" || device.state?.camera_available) && (
+                  <DashboardCameraPreview
+                    device={device}
+                    onOpen={() => setSelected(device)}
+                  />
+                )}
                 <ControlPanel
                   compact
                   device={device}
@@ -147,6 +153,112 @@ export default function DashboardPage() {
         }}
       />
     </div>
+  );
+}
+
+function DashboardCameraPreview({
+  device,
+  onOpen,
+}: {
+  device: Device;
+  onOpen: () => void;
+}) {
+  const [src, setSrc] = useState("");
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState("");
+
+  useEffect(() => {
+    let cancelled = false;
+    let objectUrl = "";
+
+    const refresh = async () => {
+      setLoading(true);
+      try {
+        const response = await fetch(
+          `${apiUrl(`/devices/${device.id}/camera-frame/`)}?dashboard=${Date.now()}`,
+          { cache: "no-store" },
+        );
+
+        if (!response.ok) {
+          let message = `Camera preview failed (${response.status})`;
+          try {
+            const payload = (await response.json()) as { error?: string };
+            if (payload.error) message = payload.error;
+          } catch {
+            // Keep the HTTP fallback when the upstream body is not JSON.
+          }
+          throw new Error(message);
+        }
+
+        const blob = await response.blob();
+        if (!blob.size || !blob.type.startsWith("image/")) {
+          throw new Error("Camera returned an invalid preview image.");
+        }
+
+        const nextUrl = URL.createObjectURL(blob);
+        if (cancelled) {
+          URL.revokeObjectURL(nextUrl);
+          return;
+        }
+
+        if (objectUrl) URL.revokeObjectURL(objectUrl);
+        objectUrl = nextUrl;
+        setSrc(nextUrl);
+        setError("");
+      } catch (reason) {
+        if (!cancelled) {
+          setError(
+            reason instanceof Error
+              ? reason.message
+              : "Camera preview is temporarily unavailable.",
+          );
+        }
+      } finally {
+        if (!cancelled) setLoading(false);
+      }
+    };
+
+    void refresh();
+    const timer = window.setInterval(() => void refresh(), 60_000);
+
+    return () => {
+      cancelled = true;
+      window.clearInterval(timer);
+      if (objectUrl) URL.revokeObjectURL(objectUrl);
+    };
+  }, [device.id]);
+
+  return (
+    <button
+      type="button"
+      onClick={onOpen}
+      className="mb-4 block w-full overflow-hidden rounded-2xl border border-zinc-800 bg-black text-left transition hover:border-cyan-700"
+      title={`Open ${device.name} camera controls`}
+    >
+      <div className="relative aspect-video w-full">
+        {src ? (
+          <img
+            src={src}
+            alt={`${device.name} camera preview`}
+            className="h-full w-full object-cover"
+          />
+        ) : (
+          <div className="flex h-full items-center justify-center px-4 text-center text-xs text-zinc-500">
+            {loading ? "Loading camera preview…" : "Camera preview unavailable"}
+          </div>
+        )}
+        {loading && src && (
+          <div className="absolute inset-x-0 bottom-0 bg-black/65 px-3 py-1.5 text-center text-[10px] text-zinc-300">
+            Refreshing preview…
+          </div>
+        )}
+      </div>
+      {error && (
+        <div className="border-t border-zinc-800 px-3 py-2 text-[10px] leading-4 text-amber-400">
+          {error}
+        </div>
+      )}
+    </button>
   );
 }
 
