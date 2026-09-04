@@ -82,6 +82,7 @@ class BaseDriver:
     def __init__(self, device: Device):
         self.device = device
         self.config = dict(device.config or {})
+        self._credential_updates: dict[str, Any] = {}
         if device.encrypted_credentials:
             from homehub.core.services.device_config import get_device_credentials
 
@@ -115,6 +116,21 @@ class BaseDriver:
         parameters: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         raise IntegrationError(f"{cls.display_name} does not support setup action '{action}'.")
+
+    def stage_credentials(self, credentials: dict[str, Any]) -> None:
+        """Queue credentials discovered during async I/O for synchronous persistence.
+
+        Integration coroutines must not write through Django's ORM directly. The
+        service layer persists these updates after the coroutine has returned.
+        """
+        updates = {key: value for key, value in credentials.items() if value not in (None, "")}
+        self._credential_updates.update(updates)
+        self.config.update(updates)
+
+    def consume_credential_updates(self) -> dict[str, Any]:
+        updates = dict(self._credential_updates)
+        self._credential_updates.clear()
+        return updates
 
     def capabilities(self) -> dict[str, Any]:
         return {
