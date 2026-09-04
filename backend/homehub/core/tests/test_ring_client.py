@@ -5,7 +5,7 @@ from unittest.mock import AsyncMock, Mock, patch
 
 from django.test import SimpleTestCase
 
-from homehub.core.services.ring_client import open_ring_session
+from homehub.core.services.ring_client import open_ring_session, take_ring_snapshot
 
 
 class RingClientSessionTests(SimpleTestCase):
@@ -98,3 +98,50 @@ class RingClientSessionTests(SimpleTestCase):
         self.assertEqual(token, token_value)
         ring_instance.async_create_session.assert_not_awaited()
         ring_instance.async_update_devices.assert_awaited_once_with()
+
+
+
+class RingSnapshotEndpointTests(SimpleTestCase):
+    def test_reliable_snapshot_endpoint_contract(self):
+        response = SimpleNamespace(content=b"jpeg-data")
+        ring = SimpleNamespace(async_query=AsyncMock(return_value=response))
+        device = SimpleNamespace(_attrs={"id": 987652})
+
+        with patch("homehub.core.services.ring_client.time.time", return_value=1000):
+            result = asyncio.run(
+                take_ring_snapshot(
+                    ring,
+                    device,
+                    max_age=30,
+                    max_wait=12,
+                )
+            )
+
+        self.assertEqual(result, b"jpeg-data")
+        ring.async_query.assert_awaited_once_with(
+            "/snapshots/next/987652",
+            extra_params={
+                "after-ms": 970000,
+                "max-wait-ms": 12000,
+                "extras": "force",
+            },
+            base_uri="https://app-snaps.ring.com",
+            timeout=14,
+        )
+
+    def test_new_library_snapshot_method_is_preferred_when_available(self):
+        snapshot = AsyncMock(return_value=b"jpeg-data")
+        device = SimpleNamespace(async_take_snapshot=snapshot)
+        ring = SimpleNamespace()
+
+        result = asyncio.run(
+            take_ring_snapshot(
+                ring,
+                device,
+                max_age=20,
+                max_wait=8,
+            )
+        )
+
+        self.assertEqual(result, b"jpeg-data")
+        snapshot.assert_awaited_once_with(max_age=20, max_wait=8)
