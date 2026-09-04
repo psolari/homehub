@@ -31,10 +31,10 @@ class Candidate:
 def _candidate_identity(candidate: Candidate) -> tuple[str, ...]:
     """Return a stable physical identity for discovery de-duplication."""
     model = candidate.model or candidate.device_type
-    if candidate.mac_address:
-        return ("mac", candidate.mac_address.lower(), model)
     if candidate.ip_address:
         return ("ip", candidate.ip_address, model)
+    if candidate.mac_address:
+        return ("mac", candidate.mac_address.lower(), model)
     return ("uid", candidate.unique_id)
 
 
