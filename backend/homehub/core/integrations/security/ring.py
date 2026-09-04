@@ -1,4 +1,4 @@
-from homehub.core.integrations.base import BaseDriver, Control, IntegrationError, TwoFactorRequired
+from homehub.core.integrations.base import BaseDriver, Control, IntegrationError
 from homehub.core.integrations.registry import register_driver
 from homehub.core.services.accounts import (
     get_account_credentials,
