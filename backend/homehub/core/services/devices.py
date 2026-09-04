@@ -83,7 +83,12 @@ def persist_state(device: Device, state: dict[str, Any]) -> Device:
         device.last_seen = timezone.now()
     device.save(update_fields=["state", "is_online", "status", "last_seen"])
     location = state.get("location")
-    if isinstance(location, dict) and location.get("x") is not None and location.get("y") is not None:
+    if (
+        isinstance(location, dict)
+        and location.get("x") is not None
+        and location.get("y") is not None
+        and location.get("source") != "roomba_mqtt"
+    ):
         obj = device.floorplan_objects.select_related("floor_plan").first()
         DeviceLocation.objects.create(
             device=device,
