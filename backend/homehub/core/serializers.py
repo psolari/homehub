@@ -2,6 +2,7 @@ from rest_framework import serializers
 
 from homehub.core.models import (
     DashboardCard,
+    DashboardGroup,
     Device,
     DeviceLocation,
     FloorPlan,
@@ -59,10 +60,28 @@ class FloorPlanSerializer(serializers.ModelSerializer):
         fields = ["id", "name", "description", "svg_data", "width", "height", "rooms", "objects"]
 
 
+class DashboardGroupSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = DashboardGroup
+        fields = ["id", "name", "order"]
+
+
 class DashboardCardSerializer(serializers.ModelSerializer):
     class Meta:
         model = DashboardCard
-        fields = ["id", "device", "enabled", "size", "order", "visible_controls"]
+        fields = [
+            "id",
+            "device",
+            "group",
+            "enabled",
+            "size",
+            "order",
+            "visible_controls",
+            "grid_x",
+            "grid_y",
+            "grid_w",
+            "grid_h",
+        ]
 
 
 class DeviceLocationSerializer(serializers.ModelSerializer):
