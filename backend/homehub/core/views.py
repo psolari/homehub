@@ -33,6 +33,7 @@ from homehub.core.serializers import (
 from homehub.core.services.accounts import get_active_account, get_credentials
 from homehub.core.services.device_config import get_device_credentials
 from homehub.core.services.integration_accounts import validate_integration_account
+from homehub.core.services.ring_live import ring_live_view_manager
 from homehub.core.services.devices import (
     create_device,
     driver_for,
@@ -219,6 +220,85 @@ class DeviceViewSet(OpenViewSet):
             )
         except Exception as exc:
             return Response({"error": str(exc)}, status=status.HTTP_400_BAD_REQUEST)
+
+    @action(detail=True, methods=["get"], url_path="live-view/config")
+    def live_view_config(self, request, pk=None):
+        device = self.get_object()
+        if device.model != "ring_camera":
+            return Response(
+                {"error": "Live View is currently available for Ring cameras only."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        return Response(
+            {
+                "supported": True,
+                "ice_servers": ring_live_view_manager.ice_servers(),
+                "audio_receive": True,
+                "talkback": True,
+            }
+        )
+
+    @action(detail=True, methods=["post"], url_path="live-view/start")
+    def live_view_start(self, request, pk=None):
+        device = self.get_object()
+        try:
+            result = ring_live_view_manager.start(
+                device,
+                session_id=str(request.data.get("session_id") or ""),
+                sdp_offer=str(request.data.get("offer") or ""),
+            )
+            return Response(result)
+        except Exception as exc:
+            return Response(
+                {"error": str(exc) or exc.__class__.__name__},
+                status=status.HTTP_502_BAD_GATEWAY,
+            )
+
+    @action(detail=True, methods=["post"], url_path="live-view/candidate")
+    def live_view_candidate(self, request, pk=None):
+        self.get_object()
+        try:
+            ring_live_view_manager.candidate(
+                str(request.data.get("session_id") or ""),
+                candidate=str(request.data.get("candidate") or ""),
+                sdp_m_line_index=int(request.data.get("sdp_m_line_index") or 0),
+            )
+            return Response({"ok": True})
+        except Exception as exc:
+            return Response(
+                {"error": str(exc) or exc.__class__.__name__},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+    @action(detail=True, methods=["get"], url_path="live-view/messages")
+    def live_view_messages(self, request, pk=None):
+        self.get_object()
+        try:
+            return Response(
+                ring_live_view_manager.messages(
+                    str(request.query_params.get("session_id") or ""),
+                    after=int(request.query_params.get("after") or 0),
+                )
+            )
+        except Exception as exc:
+            return Response(
+                {"error": str(exc) or exc.__class__.__name__},
+                status=status.HTTP_404_NOT_FOUND,
+            )
+
+    @action(detail=True, methods=["post"], url_path="live-view/stop")
+    def live_view_stop(self, request, pk=None):
+        self.get_object()
+        try:
+            ring_live_view_manager.stop(
+                str(request.data.get("session_id") or "")
+            )
+            return Response({"ok": True})
+        except Exception as exc:
+            return Response(
+                {"error": str(exc) or exc.__class__.__name__},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
 
     @action(detail=True, methods=["get"], url_path="camera-frame")
     def camera_frame(self, request, pk=None):
