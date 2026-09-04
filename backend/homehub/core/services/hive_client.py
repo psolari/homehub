@@ -46,14 +46,34 @@ async def open_hive_session(credentials: dict[str, Any]):
 
     try:
         hive = Hive(username=username, password=password)
+
+        # pyhive-integration 1.0.9's startSession() calls updateTokens(..., False),
+        # which intentionally does not update tokenCreated. On a fresh Hive object
+        # tokenCreated is datetime.min, so getDevices() immediately treats the
+        # brand-new token as expired and enters a refresh/retry flow. Seed the
+        # tokens once with normal expiry bookkeeping before startSession().
+        token_updater = getattr(hive, "updateTokens", None) or getattr(
+            hive, "update_tokens", None
+        )
+        if token_updater is not None:
+            await token_updater(tokens)
+
+        start_session = getattr(hive, "startSession", None) or getattr(
+            hive, "start_session", None
+        )
+        if start_session is None:
+            raise HiveClientError(
+                "The installed Hive integration does not expose a session-start API."
+            )
+
         await asyncio.wait_for(
-            hive.startSession({"tokens": tokens}),
-            timeout=35,
+            start_session({"tokens": tokens}),
+            timeout=20,
         )
     except TimeoutError as exc:
         raise HiveClientError(
-            "Hive authenticated, but loading the Hive account/devices timed out after 35 seconds. "
-            "The Hive service may be slow; try again shortly."
+            "Hive authenticated, but loading the Hive account/devices timed out after 20 seconds. "
+            "HomeHub avoided the library's immediate token-refresh path, but Hive still did not return the device inventory."
         ) from exc
     except Exception as exc:
         raise HiveClientError(
