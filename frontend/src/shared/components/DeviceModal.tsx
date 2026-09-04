@@ -17,8 +17,15 @@ export default function DeviceModal({
 }) {
   const [current, setCurrent] = useState<Device | null>(device);
   const [frameNonce, setFrameNonce] = useState(0);
+  const [cameraError, setCameraError] = useState("");
 
-  useEffect(() => setCurrent(device), [device]);
+  useEffect(() => {
+    setCurrent(device);
+    setCameraError("");
+    if (device?.device_type === "camera" || device?.state?.camera_available) {
+      setFrameNonce((value) => value + 1);
+    }
+  }, [device]);
   useEffect(() => {
     if (!open || !device) return;
     let cancelled = false;
@@ -28,24 +35,32 @@ export default function DeviceModal({
         if (!cancelled) {
           setCurrent(data.device);
           onChanged?.(data.device);
-          if (data.device.device_type === "camera" || data.device.state?.camera_available) {
-            setFrameNonce((value) => value + 1);
-          }
         }
       } catch {
         // Keep the last-known state when a device cannot be refreshed.
       }
     };
-    refresh();
-    const timer = window.setInterval(refresh, 4000);
+    void refresh();
+    const cloudDevice =
+      device.source === "cloud" ||
+      device.model === "ring_camera" ||
+      device.model === "hive_heating" ||
+      device.model === "alexa_echo";
+    const timer = window.setInterval(refresh, cloudDevice ? 15000 : 5000);
     return () => {
       cancelled = true;
       window.clearInterval(timer);
     };
-  }, [open, device?.id]);
+  }, [open, device?.id, device?.model, device?.source]);
 
   if (!current) return null;
   const control = async (action: string, parameters?: Record<string, unknown>) => {
+    if (action === "snapshot") {
+      setCameraError("");
+      setFrameNonce((value) => value + 1);
+      return { state: current.state || {} };
+    }
+
     const data = await post<{ state: Record<string, unknown> }>(`/devices/${current.id}/control/`, {
       action,
       parameters,
@@ -71,12 +86,25 @@ export default function DeviceModal({
         </div>
         <div className="space-y-5">
           {isCamera && (
-            <img
-              key={frameNonce}
-              className="aspect-video w-full rounded-xl border border-zinc-800 bg-black object-contain"
-              src={`${apiUrl(`/devices/${current.id}/camera-frame/`)}?t=${frameNonce}`}
-              alt={`${current.name} camera`}
-            />
+            <div className="space-y-2">
+              <img
+                key={frameNonce}
+                className="aspect-video w-full rounded-xl border border-zinc-800 bg-black object-contain"
+                src={`${apiUrl(`/devices/${current.id}/camera-frame/`)}?t=${frameNonce}`}
+                alt={`${current.name} camera`}
+                onLoad={() => setCameraError("")}
+                onError={() =>
+                  setCameraError(
+                    "Could not load a Ring snapshot. The camera may be waking up or Ring may have timed out. Use Refresh camera to try again.",
+                  )
+                }
+              />
+              {cameraError && (
+                <div className="rounded-lg border border-amber-900/60 bg-amber-950/30 px-3 py-2 text-xs text-amber-300">
+                  {cameraError}
+                </div>
+              )}
+            </div>
           )}
           <ControlPanel device={current} onControl={control} />
         </div>
