@@ -46,11 +46,10 @@ class SamsungTizenDriver(BaseDriver):
         "advanced_fields": ["token", "port"],
     }
     controls = [
-        Control("power_on", "Power on"),
-        Control("power_off", "Power off"),
-        Control("volume_up", "Volume +"),
-        Control("volume_down", "Volume -"),
-        Control("mute", "Mute"),
+        Control("power", "Power", type="toggle", state_key="power", parameter="value", icon="power"),
+        Control("volume_up", "Volume +", icon="volume-plus"),
+        Control("volume_down", "Volume -", icon="volume-minus"),
+        Control("mute", "Mute", type="toggle", state_key="muted", parameter="value", icon="volume-mute"),
         Control("play", "Play", group="media"),
         Control("pause", "Pause", group="media"),
         Control("stop", "Stop", group="media"),
@@ -141,15 +140,20 @@ class SamsungTizenDriver(BaseDriver):
         self._persist_token()
         return result
 
+    async def action_power(self, value):
+        if bool(value):
+            mac = self.device.mac_address
+            if not mac:
+                raise IntegrationError("HomeHub could not resolve the TV MAC address for Wake-on-LAN")
+            await self.to_thread(send_magic_packet, mac)
+            return {"sent": True, "power": True}
+        return await self._key("KEY_POWER")
+
     async def action_power_on(self):
-        mac = self.device.mac_address or self.config.get("mac_address")
-        if not mac:
-            raise IntegrationError("A MAC address is required to power on a Samsung TV")
-        await self.to_thread(send_magic_packet, mac)
-        return {"sent": True}
+        return await self.action_power(True)
 
     async def action_power_off(self):
-        return await self._key("KEY_POWER")
+        return await self.action_power(False)
 
     async def action_volume_up(self):
         return await self._shortcut("volume_up")
@@ -157,7 +161,7 @@ class SamsungTizenDriver(BaseDriver):
     async def action_volume_down(self):
         return await self._shortcut("volume_down")
 
-    async def action_mute(self):
+    async def action_mute(self, value=None):
         return await self._shortcut("mute")
 
     async def action_play(self):
