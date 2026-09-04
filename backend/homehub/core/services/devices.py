@@ -102,8 +102,10 @@ def initialize_device(device: Device, *, raise_errors: bool = True) -> dict[str,
         driver = driver_for(device)
         device.capabilities = driver.capabilities()
         device.save(update_fields=["capabilities"])
-        state = run_async(driver.initialize())
-        _persist_driver_credentials(driver)
+        try:
+            state = run_async(driver.initialize())
+        finally:
+            _persist_driver_credentials(driver)
         if not isinstance(state, dict):
             state = {"online": True, "status": "unknown"}
         if state.get("online") is False:
@@ -124,8 +126,10 @@ def refresh_device(device: Device, *, raise_errors: bool = False) -> dict[str, A
         driver = driver_for(device)
         device.capabilities = driver.capabilities()
         device.save(update_fields=["capabilities"])
-        state = run_async(driver.get_state())
-        _persist_driver_credentials(driver)
+        try:
+            state = run_async(driver.get_state())
+        finally:
+            _persist_driver_credentials(driver)
         persist_state(device, state)
         return state
     except Exception as exc:
@@ -141,8 +145,10 @@ def execute_control(device: Device, action: str, parameters: dict[str, Any] | No
     allowed = {item["action"] for item in driver.capabilities().get("controls", [])}
     if action not in allowed:
         raise IntegrationError(f"Action '{action}' is not advertised by this device.")
-    result = run_async(driver.execute(action, parameters or {}))
-    _persist_driver_credentials(driver)
+    try:
+        result = run_async(driver.execute(action, parameters or {}))
+    finally:
+        _persist_driver_credentials(driver)
     return {"result": result, "state": refresh_device(device)}
 
 
