@@ -3,6 +3,8 @@ export type ControlDescriptor = {
   label: string;
   type?: "button" | "range" | "toggle" | "select" | "text" | "media_search" | "number_pair";
   group?: string;
+  icon?: string;
+  state_key?: string;
   parameter?: string;
   min?: number;
   max?: number;
