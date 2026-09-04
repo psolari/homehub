@@ -53,7 +53,6 @@ class ControlContractTests(TestCase):
             control["action"]: control
             for control in catalog["camera"]["ring_camera"]["controls"]
         }
-        self.assertEqual(ring_actions["lights"]["type"], "toggle")
-        self.assertEqual(ring_actions["siren"]["type"], "toggle")
-        self.assertNotIn("lights_on", ring_actions)
-        self.assertNotIn("lights_off", ring_actions)
+        self.assertEqual(set(ring_actions), {"snapshot"})
+        self.assertNotIn("lights", ring_actions)
+        self.assertNotIn("siren", ring_actions)
