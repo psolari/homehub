@@ -327,6 +327,7 @@ def _discover_ring_account(account) -> list[Candidate]:
     from homehub.core.services.accounts import get_credentials, set_credentials
     from homehub.core.services.devices import run_async
     from homehub.core.services.ring_client import (
+        close_ring_session,
         open_ring_session,
         ring_device_groups,
         ring_device_identity,
@@ -336,41 +337,44 @@ def _discover_ring_account(account) -> list[Candidate]:
     async def discover():
         credentials = get_credentials(account)
         ring, token = await open_ring_session(credentials)
-        result: list[Candidate] = []
-        for family, family_devices in ring_device_groups(ring).items():
-            # Chimes are Ring accessories rather than camera/doorbell endpoints.
-            if family == "chimes":
-                continue
-            for device in family_devices:
-                device_id = ring_device_identity(device)
-                if not device_id:
+        try:
+            result: list[Candidate] = []
+            for family, family_devices in ring_device_groups(ring).items():
+                # Chimes are Ring accessories rather than camera/doorbell endpoints.
+                if family == "chimes":
                     continue
-                result.append(
-                    Candidate(
-                        unique_id=f"ring:{device_id}",
-                        name=ring_device_name(device, family),
-                        device_type="camera",
-                        model="ring_camera",
-                        manufacturer="Ring",
-                        hardware_model=str(
-                            getattr(device, "model", None)
-                            or getattr(device, "kind", None)
-                            or ""
-                        ),
-                        source="cloud",
-                        config={
-                            "account_id": account.id,
-                            "ring_device_id": device_id,
-                            "family": family,
-                        },
-                        discovery_data={
-                            "method": "ring_cloud",
-                            "family": family,
-                            "kind": str(getattr(device, "kind", "") or ""),
-                        },
+                for device in family_devices:
+                    device_id = ring_device_identity(device)
+                    if not device_id:
+                        continue
+                    result.append(
+                        Candidate(
+                            unique_id=f"ring:{device_id}",
+                            name=ring_device_name(device, family),
+                            device_type="camera",
+                            model="ring_camera",
+                            manufacturer="Ring",
+                            hardware_model=str(
+                                getattr(device, "model", None)
+                                or getattr(device, "kind", None)
+                                or ""
+                            ),
+                            source="cloud",
+                            config={
+                                "account_id": account.id,
+                                "ring_device_id": device_id,
+                                "family": family,
+                            },
+                            discovery_data={
+                                "method": "ring_cloud",
+                                "family": family,
+                                "kind": str(getattr(device, "kind", "") or ""),
+                            },
+                        )
                     )
-                )
-        return result, token
+            return result, token
+        finally:
+            await close_ring_session(ring)
 
     result, token = run_async(discover())
     if token:
