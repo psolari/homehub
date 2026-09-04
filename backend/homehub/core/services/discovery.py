@@ -324,7 +324,11 @@ def _discover_alexa_account(account) -> list[Candidate]:
 
 
 def _discover_ring_account(account) -> list[Candidate]:
-    from homehub.core.services.accounts import get_credentials, set_credentials
+    from homehub.core.services.accounts import (
+        delete_credentials,
+        get_credentials,
+        set_credentials,
+    )
     from homehub.core.services.devices import run_async
     from homehub.core.services.ring_client import (
         close_ring_session,
@@ -379,6 +383,7 @@ def _discover_ring_account(account) -> list[Candidate]:
     result, token = run_async(discover())
     if token:
         set_credentials(account, {"token": token})
+    delete_credentials(account, "otp")
     return result
 
 
