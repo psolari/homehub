@@ -50,6 +50,7 @@ export default function RingLiveView({
   const peerRef = useRef<RTCPeerConnection | null>(null);
   const senderRef = useRef<RTCRtpSender | null>(null);
   const microphoneRef = useRef<MediaStream | null>(null);
+  const talkHeldRef = useRef(false);
   const stoppedRef = useRef(false);
   const sessionRef = useRef("");
   const [status, setStatus] = useState("Starting Ring Live View…");
@@ -125,6 +126,8 @@ export default function RingLiveView({
       await pc.addIceCandidate(candidate);
     };
 
+    let liveConnected = false;
+
     const pollMessages = async (
       pc: RTCPeerConnection,
       sessionId: string,
@@ -173,7 +176,7 @@ export default function RingLiveView({
           return;
         }
 
-        await sleep(connected ? 1000 : 300);
+        await sleep(liveConnected ? 1000 : 300);
       }
     };
 
@@ -225,6 +228,7 @@ export default function RingLiveView({
         pc.onconnectionstatechange = () => {
           if (cancelled) return;
           if (pc.connectionState === "connected") {
+            liveConnected = true;
             setConnected(true);
             setStatus("Live");
             setError("");
@@ -232,6 +236,7 @@ export default function RingLiveView({
             pc.connectionState === "failed" ||
             pc.connectionState === "closed"
           ) {
+            liveConnected = false;
             setConnected(false);
             setStatus("Live View stopped");
             if (pc.connectionState === "failed") {
@@ -240,6 +245,7 @@ export default function RingLiveView({
               );
             }
           } else if (pc.connectionState === "disconnected") {
+            liveConnected = false;
             setStatus("Reconnecting…");
           }
         };
@@ -332,6 +338,7 @@ export default function RingLiveView({
 
   const startTalking = async () => {
     if (talking || !talkbackAvailable || !senderRef.current) return;
+    talkHeldRef.current = true;
     setError("");
     try {
       const stream = await navigator.mediaDevices.getUserMedia({
@@ -342,10 +349,20 @@ export default function RingLiveView({
         },
         video: false,
       });
+      if (!talkHeldRef.current || stoppedRef.current) {
+        stream.getTracks().forEach((track) => track.stop());
+        return;
+      }
       microphoneRef.current = stream;
       const track = stream.getAudioTracks()[0];
       if (!track) throw new Error("Browser did not provide a microphone track.");
       await senderRef.current.replaceTrack(track);
+      if (!talkHeldRef.current || stoppedRef.current) {
+        await senderRef.current.replaceTrack(null);
+        stream.getTracks().forEach((item) => item.stop());
+        microphoneRef.current = null;
+        return;
+      }
       setTalking(true);
     } catch (reason) {
       microphoneRef.current?.getTracks().forEach((track) => track.stop());
@@ -357,6 +374,11 @@ export default function RingLiveView({
           : "HomeHub could not access your microphone.",
       );
     }
+  };
+
+  const releaseTalk = async () => {
+    talkHeldRef.current = false;
+    await endMicrophone();
   };
 
   const enablePlayback = async () => {
@@ -438,10 +460,10 @@ export default function RingLiveView({
             event.currentTarget.setPointerCapture(event.pointerId);
             void startTalking();
           }}
-          onPointerUp={() => void endMicrophone()}
-          onPointerCancel={() => void endMicrophone()}
+          onPointerUp={() => void releaseTalk()}
+          onPointerCancel={() => void releaseTalk()}
           onLostPointerCapture={() => {
-            if (talking) void endMicrophone();
+            if (talkHeldRef.current || talking) void releaseTalk();
           }}
           className={`inline-flex select-none items-center gap-2 rounded-lg border px-3 py-2 text-xs font-semibold transition disabled:cursor-not-allowed disabled:opacity-40 ${
             talking
