@@ -25,7 +25,7 @@ def _reported_state(client) -> dict[str, Any]:
 def extract_roomba_location(
     client,
     config: dict[str, Any],
-) -> dict[str, float] | None:
+) -> dict[str, Any] | None:
     """Return Roomba map coordinates in the library's intended orientation.
 
     roombapy 1.9.x deliberately swaps the robot's reported pose point x/y into
@@ -80,6 +80,7 @@ def extract_roomba_location(
         "heading": heading,
         "raw_x": raw_x,
         "raw_y": raw_y,
+        "source": "roomba_mqtt",
     }
 
 
@@ -236,7 +237,11 @@ class RoombaTrackingManager:
 
         close_old_connections()
         try:
-            device = Device.objects.get(pk=session.device_id)
+            try:
+                device = Device.objects.get(pk=session.device_id)
+            except Device.DoesNotExist:
+                self.stop(session.device_id)
+                return
             merged_state = {**(device.state or {}), **state}
             device.state = merged_state
             device.is_online = bool(state.get("online", True))
