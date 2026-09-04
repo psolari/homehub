@@ -21,10 +21,10 @@ class IntegrationAccountConnectionTests(TestCase):
         )
 
     @patch(
-        "homehub.core.views.validate_integration_account",
+        "homehub.core.views.discover_account",
         side_effect=RuntimeError("Hive rejected these credentials"),
     )
-    def test_invalid_credentials_are_not_marked_connected(self, validate):
+    def test_invalid_credentials_are_not_marked_connected(self, discover):
         response = self.client.post(
             f"/api/v1/integration-accounts/{self.account.id}/connect/",
             {},
@@ -36,19 +36,13 @@ class IntegrationAccountConnectionTests(TestCase):
         self.assertEqual(self.account.status, "error")
         self.assertIn("Hive rejected", self.account.error)
         self.assertNotIn("verified_at", self.account.metadata)
+        discover.assert_called_once_with(self.account)
 
     @patch("homehub.core.views.discover_account")
-    @patch("homehub.core.views.validate_integration_account")
-    def test_successful_validation_records_verification_and_discovery(
+    def test_successful_hive_discovery_is_single_pass_verification(
         self,
-        validate,
         discover,
     ):
-        validate.return_value = {
-            "message": "Hive account authenticated successfully.",
-            "provider_devices_seen": 2,
-            "verified_at": "2026-09-04T21:00:00+01:00",
-        }
         discover.return_value = [
             {
                 "unique_id": "hive:zone-1",
@@ -68,10 +62,9 @@ class IntegrationAccountConnectionTests(TestCase):
         self.account.refresh_from_db()
         self.assertEqual(self.account.status, "connected")
         self.assertEqual(self.account.metadata["discovered_devices_count"], 1)
-        self.assertEqual(
-            response.data["connection"]["message"],
-            "Hive account authenticated successfully.",
-        )
+        self.assertIn("authenticated successfully", response.data["connection"]["message"])
+        self.assertIn("verified_at", self.account.metadata)
+        discover.assert_called_once_with(self.account)
 
     def test_changing_credentials_marks_account_unverified(self):
         self.account.status = "connected"
