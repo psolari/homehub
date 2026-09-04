@@ -102,3 +102,38 @@ class HiveClientTests(SimpleTestCase):
                         }
                     )
                 )
+
+
+    def test_login_timeout_is_reported_instead_of_hanging(self):
+        auth_instance = SimpleNamespace(login=AsyncMock(return_value={"accessToken": "token"}))
+
+        class FakeAuth:
+            def __new__(cls, *, username, password):
+                return auth_instance
+
+        fake_module = SimpleNamespace(Auth=FakeAuth, Hive=object)
+
+        async def timeout_immediately(awaitable, timeout):
+            if hasattr(awaitable, "close"):
+                awaitable.close()
+            raise TimeoutError
+
+        with (
+            patch.dict(sys.modules, {"apyhiveapi": fake_module}),
+            patch(
+                "homehub.core.services.hive_client.asyncio.wait_for",
+                side_effect=timeout_immediately,
+            ),
+        ):
+            with self.assertRaisesRegex(
+                HiveClientError,
+                "Hive login timed out after 25 seconds",
+            ):
+                asyncio.run(
+                    open_hive_session(
+                        {
+                            "username": "owner@example.com",
+                            "password": "correct-password",
+                        }
+                    )
+                )
