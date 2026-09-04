@@ -121,11 +121,18 @@ export type ProviderField = {
   default?: any;
   optional?: boolean;
   secret?: boolean;
+  description?: string;
 };
 
 export type ProviderDefinition = {
   display_name: string;
   description: string;
+  category?: string;
+  icon?: string;
+  what_it_does?: string[];
+  setup_steps?: string[];
+  notes?: string[];
+  supports_device_discovery?: boolean;
   fields: ProviderField[];
   auth_type?: string;
 };
