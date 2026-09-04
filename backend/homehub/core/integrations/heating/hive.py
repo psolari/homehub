@@ -58,9 +58,12 @@ class HiveHeatingDriver(BaseDriver):
     ]
 
     async def _session(self):
-        credentials = get_account_credentials(
-            get_active_account("hive", account_id=self.config.get("account_id"))
+        account = await self.to_thread(
+            get_active_account,
+            "hive",
+            self.config.get("account_id"),
         )
+        credentials = await self.to_thread(get_account_credentials, account)
         return await open_hive_session(credentials)
 
     async def _device(self):
