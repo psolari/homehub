@@ -3,17 +3,18 @@ PROVIDER_SCHEMAS = {
         "display_name": "Spotify",
         "category": "Music",
         "icon": "spotify",
-        "description": "Connect Spotify so HomeHub speakers can search and start Spotify playback.",
+        "description": "Connect Spotify for the full HomeHub music player, library, podcasts, search and Spotify Connect playback.",
         "what_it_does": [
-            "Adds Spotify search to compatible speaker controls.",
-            "Lets HomeHub start playback on Spotify Connect targets.",
+            "Adds the full Spotify player, search, playlists, saved podcasts/episodes and personalised library views.",
+            "Lets HomeHub transfer and control playback on available Spotify Connect targets, including matched HomeHub speakers.",
             "Does not discover speakers by itself; Sonos/Google/Alexa are discovered separately.",
         ],
         "setup_steps": [
             "Create a Spotify developer application and copy its Client ID and Client secret.",
             "Add the Redirect URI shown below to the Spotify app exactly as displayed.",
             "Save the credentials here, then authorise HomeHub in the Spotify window.",
-            "Return to this page and verify the connection.",
+            "Approve the requested library and playback permissions. Existing HomeHub Spotify users may need to authorise once more after player upgrades.",
+            "Return to this page and verify the connection, then open Spotify from the main sidebar.",
         ],
         "notes": [
             "Spotify playback requires a Spotify account and a target that is available through Spotify Connect.",
