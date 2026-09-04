@@ -11,6 +11,7 @@ from homehub.core.integrations.base import IntegrationError
 from homehub.core.integrations.registry import get_driver
 from homehub.core.models import DashboardCard, Device, DeviceLocation
 from homehub.core.services.device_config import set_device_credentials, split_driver_config
+from homehub.core.services.network import resolve_mac_address
 
 
 def run_async(awaitable):
@@ -24,6 +25,21 @@ def run_async(awaitable):
 
 def driver_for(device: Device):
     return get_driver(device.device_type, device.model)(device)
+
+
+def _persist_driver_credentials(driver) -> None:
+    updates = driver.consume_credential_updates()
+    if updates:
+        set_device_credentials(driver.device, updates)
+
+
+def _ensure_device_mac(device: Device) -> None:
+    if device.mac_address or not device.ip_address:
+        return
+    mac = resolve_mac_address(str(device.ip_address))
+    if mac:
+        device.mac_address = mac
+        device.save(update_fields=["mac_address"])
 
 
 def _normalise_status(state: dict[str, Any]) -> str:
@@ -82,10 +98,12 @@ def persist_state(device: Device, state: dict[str, Any]) -> Device:
 
 def initialize_device(device: Device, *, raise_errors: bool = True) -> dict[str, Any]:
     try:
+        _ensure_device_mac(device)
         driver = driver_for(device)
         device.capabilities = driver.capabilities()
         device.save(update_fields=["capabilities"])
         state = run_async(driver.initialize())
+        _persist_driver_credentials(driver)
         if not isinstance(state, dict):
             state = {"online": True, "status": "unknown"}
         if state.get("online") is False:
@@ -102,10 +120,12 @@ def initialize_device(device: Device, *, raise_errors: bool = True) -> dict[str,
 
 def refresh_device(device: Device, *, raise_errors: bool = False) -> dict[str, Any]:
     try:
+        _ensure_device_mac(device)
         driver = driver_for(device)
         device.capabilities = driver.capabilities()
         device.save(update_fields=["capabilities"])
         state = run_async(driver.get_state())
+        _persist_driver_credentials(driver)
         persist_state(device, state)
         return state
     except Exception as exc:
@@ -122,6 +142,7 @@ def execute_control(device: Device, action: str, parameters: dict[str, Any] | No
     if action not in allowed:
         raise IntegrationError(f"Action '{action}' is not advertised by this device.")
     result = run_async(driver.execute(action, parameters or {}))
+    _persist_driver_credentials(driver)
     return {"result": result, "state": refresh_device(device)}
 
 
@@ -134,6 +155,8 @@ def create_device(
 ) -> Device:
     payload = dict(validated_data)
     supplied_config = payload.pop("config", {}) or {}
+    if payload.get("ip_address") and not payload.get("mac_address"):
+        payload["mac_address"] = resolve_mac_address(str(payload["ip_address"]))
     validation_payload = {**payload, "config": supplied_config}
     validate_setup_payload(validation_payload)
 
