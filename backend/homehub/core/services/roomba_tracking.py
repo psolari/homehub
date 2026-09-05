@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+import logging
 import threading
 import time
 from typing import Any
@@ -9,6 +10,9 @@ from django.db import close_old_connections
 from django.utils import timezone
 
 from homehub.core.models import Device, DeviceLocation
+
+
+logger = logging.getLogger(__name__)
 
 
 def _reported_state(client) -> dict[str, Any]:
@@ -37,26 +41,31 @@ def extract_roomba_location(
     pose = reported.get("pose")
     pose2 = reported.get("pose2")
     has_pose = isinstance(pose, dict) or isinstance(pose2, dict)
-    if not has_pose:
-        return None
 
     raw_x: float
     raw_y: float
     heading: float
 
     coords = getattr(client, "co_ords", None)
-    if (
+    has_coords = (
         isinstance(coords, dict)
         and coords.get("x") is not None
         and coords.get("y") is not None
-    ):
+    )
+    if has_coords:
         try:
             raw_x = float(coords["x"])
             raw_y = float(coords["y"])
             heading = float(coords.get("theta") or 0)
         except (TypeError, ValueError):
             return None
-    else:
+
+        # roombapy can publish its public co_ords before a complete pose object
+        # has been merged into master_state. Ignore only the library's initial
+        # zero placeholder, not a real moving coordinate.
+        if not has_pose and raw_x == 0 and raw_y == 0:
+            return None
+    elif has_pose:
         source = pose if isinstance(pose, dict) else pose2
         point = source.get("point", source) if isinstance(source, dict) else {}
         if not isinstance(point, dict):
@@ -185,11 +194,19 @@ class RoombaTrackingManager:
             config=dict(config),
         )
 
-        def on_message(_message) -> None:
+        def on_message(*_args) -> None:
             session.ready.set()
-            self._persist(session)
+            try:
+                self._persist(session)
+            except Exception:
+                # A temporary database/write failure must not kill the MQTT
+                # callback thread or stop future position updates.
+                logger.exception(
+                    "Failed to persist Roomba tracking update for device %s",
+                    session.device_id,
+                )
 
-        def on_disconnect(_error) -> None:
+        def on_disconnect(*_args) -> None:
             session.ready.clear()
             with self._lock:
                 if self._sessions.get(device.id) is session:
