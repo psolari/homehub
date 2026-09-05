@@ -1,0 +1,162 @@
+import math
+from types import SimpleNamespace
+
+from django.test import SimpleTestCase
+
+from homehub.core.services.roomba_tracking import (
+    build_roomba_state,
+    extract_livemap_position,
+    extract_roomba_location,
+)
+
+
+class RoombaTrackingStateTests(SimpleTestCase):
+    def test_location_uses_roombapy_map_coordinates_and_scale(self):
+        client = SimpleNamespace(
+            master_state={
+                "state": {
+                    "reported": {
+                        "pose": {
+                            "point": {"x": 20, "y": 10},
+                            "theta": 90,
+                        },
+                        "cleanMissionStatus": {"phase": "run"},
+                        "batPct": 77,
+                    }
+                }
+            },
+            co_ords={"x": 10, "y": 20, "theta": 90},
+            roomba_connected=True,
+            cleanMissionStatus_phase="run",
+        )
+
+        location = extract_roomba_location(
+            client,
+            {
+                "map_scale_x": 2,
+                "map_scale_y": 0.5,
+                "map_offset_x": 3,
+                "map_offset_y": 4,
+            },
+        )
+
+        self.assertEqual(
+            location,
+            {
+                "x": 23.0,
+                "y": 14.0,
+                "heading": 90.0,
+                "raw_x": 10.0,
+                "raw_y": 20.0,
+                "source": "roomba_mqtt",
+            },
+        )
+
+        state = build_roomba_state(client, {})
+        self.assertEqual(state["tracking_status"], "live")
+        self.assertEqual(state["status"], "running")
+        self.assertEqual(state["battery"], 77)
+
+    def test_reported_pose_beats_stale_zero_compatibility_coordinates(self):
+        client = SimpleNamespace(
+            master_state={
+                "state": {
+                    "reported": {
+                        "pose": {
+                            "point": {"x": 42, "y": 17},
+                            "theta": 30,
+                        },
+                        "cleanMissionStatus": {"phase": "run"},
+                    }
+                }
+            },
+            co_ords={"x": 0, "y": 0, "theta": 180},
+            roomba_connected=True,
+            cleanMissionStatus_phase="run",
+        )
+
+        state = build_roomba_state(client, {})
+
+        self.assertEqual(state["tracking_status"], "live")
+        self.assertEqual(state["location"]["raw_x"], 17.0)
+        self.assertEqual(state["location"]["raw_y"], 42.0)
+        self.assertEqual(state["location"]["heading"], 30.0)
+
+    def test_nonzero_public_coordinates_are_used_before_full_pose_merge(self):
+        client = SimpleNamespace(
+            master_state={
+                "state": {
+                    "reported": {
+                        "cleanMissionStatus": {"phase": "run"},
+                    }
+                }
+            },
+            co_ords={"x": 14, "y": -8, "theta": 45},
+            roomba_connected=True,
+            cleanMissionStatus_phase="run",
+        )
+
+        state = build_roomba_state(client, {})
+
+        self.assertEqual(state["tracking_status"], "live")
+        self.assertEqual(state["location"]["raw_x"], 14.0)
+        self.assertEqual(state["location"]["raw_y"], -8.0)
+
+    def test_livemap_position_uses_latest_sample(self):
+        location = extract_livemap_position(
+            {
+                "pos_update": {
+                    "cur_path": [
+                        13,
+                        -0.104733,
+                        -0.197565,
+                        -0.489053,
+                        5,
+                        -0.090486,
+                        -0.189392,
+                        0.039259,
+                        5,
+                        1784491542,
+                    ]
+                }
+            },
+            {},
+        )
+
+        self.assertIsNotNone(location)
+        self.assertAlmostEqual(location["raw_x"], -9.0486, places=4)
+        self.assertAlmostEqual(location["raw_y"], -18.9392, places=4)
+        self.assertAlmostEqual(
+            location["heading"],
+            math.degrees(0.039259),
+            places=4,
+        )
+        self.assertEqual(location["source"], "roomba_livemap")
+
+    def test_livemap_position_rejects_malformed_path(self):
+        self.assertIsNone(
+            extract_livemap_position(
+                {"pos_update": {"cur_path": [1, 2, 3]}},
+                {},
+            )
+        )
+
+    def test_tracking_reports_waiting_until_pose_is_published(self):
+        client = SimpleNamespace(
+            master_state={
+                "state": {
+                    "reported": {
+                        "cleanMissionStatus": {"phase": "charge"},
+                    }
+                }
+            },
+            co_ords={"x": 0, "y": 0, "theta": 180},
+            roomba_connected=True,
+            cleanMissionStatus_phase="charge",
+        )
+
+        state = build_roomba_state(client, {})
+
+        self.assertIsNone(state["location"])
+        self.assertEqual(state["tracking_status"], "waiting_for_pose")
+        self.assertEqual(state["status"], "idle")

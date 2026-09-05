@@ -1,145 +1,98 @@
 # HomeHub architecture
 
-This document describes the current high-level architecture of HomeHub. It is intentionally descriptive rather than a roadmap; structural refactors can be documented separately when they are made.
+## Design principle
 
-## System overview
-
-HomeHub is a single repository containing two applications:
+HomeHub separates household concepts from vendor protocols. React understands devices, state, generic controls and generic setup metadata; it does not know how Samsung, Sonos, Hive, Ring or Roomba APIs work.
 
 ```text
-React / TypeScript frontend
-          |
-          | HTTP / JSON
-          v
-Django REST API
-          |
-          +---- Django models / SQLite (development)
-          |
-          +---- device integration drivers
-                    |
-                    v
-             smart-home devices
+React feature UI
+      │
+      ▼
+shared API client
+      │
+      ▼
+Django REST /api/v1
+      │
+      ▼
+Device/setup service layer
+      │
+      ▼
+Integration registry ───── Integration accounts
+      │                            │
+      ▼                            ▼
+Device driver              Spotify / Hive / Ring / Alexa
+      │
+      ▼
+LAN or vendor service
 ```
 
-The browser communicates with the Django backend over the REST API. Django owns persistent domain data such as users, floor plans, rooms and devices. Vendor-specific communication with physical smart-home devices is handled in backend device modules rather than in the React application.
+## Backend domains
 
-## Backend
+The Django application label remains `core` to preserve the original custom-user model and migration history. Internally it is divided into:
 
-The backend is managed with Poetry and currently lives under `backend/homehub/`.
+- `accounts/`: Django `User` model.
+- `spaces/`: floor plans, rooms and floor-plan objects.
+- `devices/`: devices, dashboard cards, integration accounts and location history.
+- `integrations/`: protocol adapters, provider definitions and their registry.
+- `services/`: discovery, setup/control orchestration and encrypted credential handling.
 
-### Django project
+Django settings are separated into base, development and production modules.
 
-`backend/homehub/smart_home_backend/` contains the Django project configuration:
+## Device capability and setup contract
 
-- `settings.py` - runtime settings and environment configuration
-- `urls.py` - project-level URL routing
-- `asgi.py` / `wsgi.py` - deployment entry points
+Every integration subclasses `BaseDriver` and declares a stable driver key, generic HomeHub device type, configuration fields and generic controls. It implements state retrieval, action execution and optional camera-frame support.
 
-The current Django application is `backend/homehub/core/`.
+Drivers also publish `setup_schema`. This tells the generic React setup wizard whether the integration requires an IP or MAC address, what pairing instructions to show, which cloud account is required, which optional accounts/services may be linked, which fields are advanced, whether safe setup actions are available, and whether the final connection test must succeed.
 
-### Domain data
+The frontend renders control descriptors such as buttons, ranges, toggles, selects, text actions, media search and compound numeric actions through one shared `ControlPanel`. Vendor response formats are normalised into `Device.state` before reaching React.
 
-The current `core` application contains models for:
+## Discovery and onboarding
 
-- users
-- floor plans
-- rooms
-- devices
+Discovery combines:
 
-Django REST Framework serializers and viewsets expose these resources to the frontend.
+1. bounded local CIDR probing for known protocol ports;
+2. native Sonos discovery;
+3. Google Cast mDNS discovery;
+4. configured Hive, Ring and Alexa cloud account discovery.
 
-### Authentication
+Discovery returns normalised candidates. Discovery and persistence are intentionally separate: selecting a candidate opens `DeviceSetupWizard` rather than immediately creating a `Device` row.
 
-The backend uses Django REST Framework with Simple JWT. The frontend obtains access/refresh tokens through the backend API and uses those credentials for authenticated requests.
+The wizard is shared by discovered devices, manual additions and existing-device reconfiguration:
 
-### Device integrations
+1. Identify/select the generic device type and integration.
+2. Collect required network identity and show driver-specific physical pairing instructions.
+3. Select or configure required cloud integration accounts and optional services such as Spotify.
+4. Collect integration-specific configuration and encrypted secret fields. Safe pre-creation helpers can run here, such as supported Roomba local-password retrieval.
+5. Run **Test & add** through `/api/v1/devices/complete-setup/`.
 
-Physical device communication belongs in `core/device_modules/`. The current TV integration uses a base TV driver with LG and Samsung implementations selected by a registry function.
+For drivers requiring an active test, device creation is transactional: pairing/authentication/state retrieval must succeed before the database insert commits. A failed setup therefore stays in the wizard and does not create another broken device row.
 
-The intended boundary is:
+Existing devices use `/api/v1/devices/{id}/setup/`. Devices in an error state expose **Finish setup** while healthy devices expose **Reconfigure**. Previously stored secrets can be preserved without returning their values to the browser.
 
-```text
-API view
-   |
-   v
-integration selection
-   |
-   v
-vendor driver
-   |
-   v
-physical device
-```
+## Secret handling
 
-API code should not require vendor protocol details, and the frontend should not communicate directly with smart-home devices.
+Cloud account credentials and device pairing secrets are encrypted before database storage. Driver fields marked `secret` are separated from public `Device.config` into `Device.encrypted_credentials`.
 
-See [device-integrations.md](device-integrations.md) for the current driver convention.
+The API never returns decrypted device secrets. It only exposes `configured_credentials`, a list of secret field names already stored. The setup wizard can therefore display “already configured” and omit a blank secret value to preserve it.
 
-## Frontend
+Runtime pairing files live under `HOMEHUB_RUNTIME_DIR`, outside source control. Environment configuration is supplied through process environment variables and `.env` is ignored by Git.
 
-The frontend is a Vite React application under `frontend/`.
+## Floor plans
 
-The current source tree separates concerns into:
+A `FloorPlan` defines an SVG coordinate system. `Room` is a first-class room primitive with geometry and perimeter-wall properties. `FloorPlanObject` stores standalone structural/furniture objects, coordinates, dimensions, rotation, z-order, properties and an optional device relationship.
 
-- `api/` - shared HTTP request helpers
-- `components/` - reusable UI components
-- `pages/` - route-level screens
-- `redux/` - global application state and asynchronous state actions
-- `utils/` - shared utilities
+Interactive editing — room snapping, wall endpoint snapping, alignment guides and corner resize handles — remains in React for responsive pointer behaviour. Django stores the resulting geometry.
 
-`App.tsx` currently composes routing, authentication-aware layouts and application initialization.
+Static device objects use saved coordinates. When a linked device reports `state.location`, the UI renders that live position instead. `DeviceLocation` stores location history independently of the drawing, allowing future moving devices to reuse the same model.
 
-### State flow
+## Dashboard
 
-The normal frontend data path is:
+Each device receives a `DashboardCard` with enabled state, card size/order and the controls exposed on the compact card. The user can choose those controls in the UI. Everything else remains available in the generic full-device modal.
 
-```text
-React component/page
-       |
-       v
-Redux action/thunk
-       |
-       v
-API service
-       |
-       v
-Django REST API
-```
+## Authentication
 
-Django remains the persistent source of truth for domain data. Redux provides browser-side application state and caching.
+The backend retains its custom `User` model for future household accounts. The current REST API uses `AllowAny` and the React login flow is removed. This is intentionally a trusted-LAN deployment model, not an Internet-facing security model.
 
-## Configuration
+## Validation
 
-Runtime configuration is environment-driven.
-
-The repository root `.env.example` documents supported values. Real `.env` files are ignored by Git.
-
-- VS Code's shared backend launch configuration loads the root `.env`.
-- Vite is configured to read environment values from the repository root.
-- Direct shell execution of Django requires the relevant environment variables to be exported first.
-
-No production secret, device pairing token or local database should be committed to the repository.
-
-## Local runtime data
-
-The following are local/runtime state rather than source code:
-
-- SQLite database files
-- Python bytecode/cache directories
-- `.env` files
-- smart-device pairing tokens
-- virtual environments
-- `node_modules` and frontend build output
-
-These are excluded through the repository `.gitignore`.
-
-## Architectural principles
-
-As HomeHub grows, changes should preserve these boundaries:
-
-1. The frontend communicates with HomeHub through the backend API rather than directly with physical devices.
-2. Django owns persistent HomeHub domain data.
-3. Vendor/device protocol code stays behind integration-driver boundaries.
-4. Secrets and machine-specific runtime state stay outside Git.
-5. Environment-specific configuration stays out of application source where practical.
-6. Shared project configuration committed to Git should be portable across developer machines.
+GitHub Actions validates Django system checks, migration consistency, backend tests and critical Ruff checks, plus frontend ESLint, unit tests and a full TypeScript/Vite production build. The automated suite validates HomeHub's setup contracts without real household credentials; physical-device/account validation remains installation-specific.

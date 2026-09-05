@@ -1,0 +1,123 @@
+import * as mdi from "@mdi/js";
+import type { ControlDescriptor } from "../types";
+
+const semanticToExport: Record<string, string> = {
+  power: "mdiPower",
+  volume: "mdiVolumeHigh",
+  "volume-plus": "mdiVolumePlus",
+  "volume-minus": "mdiVolumeMinus",
+  "volume-mute": "mdiVolumeMute",
+  play: "mdiPlay",
+  pause: "mdiPause",
+  stop: "mdiStop",
+  next: "mdiSkipNext",
+  previous: "mdiSkipPrevious",
+  home: "mdiHome",
+  back: "mdiArrowLeft",
+  up: "mdiArrowUp",
+  down: "mdiArrowDown",
+  left: "mdiArrowLeft",
+  right: "mdiArrowRight",
+  enter: "mdiCheck",
+  "channel-up": "mdiChevronUp",
+  "channel-down": "mdiChevronDown",
+  input: "mdiImport",
+  apps: "mdiApps",
+  remote: "mdiRemote",
+  dock: "mdiHomeMapMarker",
+  light: "mdiLightbulb",
+  siren: "mdiAlarmLight",
+  camera: "mdiCamera",
+  "arm-home": "mdiShieldHome",
+  "arm-away": "mdiShieldLock",
+  disarm: "mdiShieldOff",
+  temperature: "mdiThermometer",
+  boost: "mdiFire",
+  "boost-off": "mdiFireOff",
+  announcement: "mdiBullhorn",
+  speak: "mdiMessageText",
+  spotify: "mdiSpotify",
+  link: "mdiLink",
+};
+
+function inferredSemantic(action: string): string | null {
+  const map: Record<string, string> = {
+    power: "power",
+    power_on: "power",
+    power_off: "power",
+    volume: "volume",
+    set_volume: "volume",
+    spotify_volume: "volume",
+    volume_up: "volume-plus",
+    volume_down: "volume-minus",
+    mute: "volume-mute",
+    unmute: "volume-mute",
+    set_mute: "volume-mute",
+    play: "play",
+    resume: "play",
+    start: "play",
+    pause: "pause",
+    stop: "stop",
+    next: "next",
+    previous: "previous",
+    home: "home",
+    back: "back",
+    up: "up",
+    down: "down",
+    left: "left",
+    right: "right",
+    enter: "enter",
+    channel_up: "channel-up",
+    channel_down: "channel-down",
+    set_input: "input",
+    source: "input",
+    launch_app: "apps",
+    remote_key: "remote",
+    custom: "remote",
+    dock: "dock",
+    lights: "light",
+    lights_on: "light",
+    lights_off: "light",
+    siren: "siren",
+    siren_on: "siren",
+    siren_off: "siren",
+    snapshot: "camera",
+    arm_home: "arm-home",
+    arm_away: "arm-away",
+    disarm: "disarm",
+    target_temperature: "temperature",
+    boost: "boost",
+    boost_off: "boost-off",
+    announcement: "announcement",
+    tts: "speak",
+    spotify_play: "spotify",
+    play_uri: "link",
+  };
+  return map[action] || null;
+}
+
+export function controlIconPath(control: ControlDescriptor): string | null {
+  const semantic = control.icon || inferredSemantic(control.action);
+  if (!semantic) return null;
+  const exportName = semanticToExport[semantic] || semantic;
+  return (mdi as unknown as Record<string, string>)[exportName] || null;
+}
+
+export function iconOnlyInCompact(control: ControlDescriptor): boolean {
+  return [
+    "play",
+    "pause",
+    "stop",
+    "next",
+    "previous",
+    "home",
+    "back",
+    "up",
+    "down",
+    "left",
+    "right",
+    "enter",
+    "volume_up",
+    "volume_down",
+  ].includes(control.action);
+}
