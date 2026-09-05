@@ -89,26 +89,32 @@ class AlexaDriver(BaseDriver):
         )
         if not device:
             raise IntegrationError("Alexa device is not available on the configured account")
-        return AlexaAPI(device, login), device
+        return AlexaAPI(device, login), device, login
 
     async def get_state(self):
-        _, device = await self._api()
-        online = device.get("online", True)
-        return {
-            "online": online,
-            "status": "on" if online else "unknown",
-            "power": "on" if online else "off",
-            "name": device.get("accountName") or device.get("name"),
-            "serial_number": device.get("serialNumber") or device.get("serial_number"),
-        }
+        _, device, login = await self._api()
+        try:
+            online = device.get("online", True)
+            return {
+                "online": online,
+                "status": "on" if online else "unknown",
+                "power": "on" if online else "off",
+                "name": device.get("accountName") or device.get("name"),
+                "serial_number": device.get("serialNumber") or device.get("serial_number"),
+            }
+        finally:
+            await login.close()
 
     async def _call(self, method, *args):
-        api, _ = await self._api()
-        function = getattr(api, method, None)
-        if not function:
-            raise IntegrationError(f"Alexa operation {method} is unavailable")
-        result = function(*args)
-        return await result if hasattr(result, "__await__") else result
+        api, _, login = await self._api()
+        try:
+            function = getattr(api, method, None)
+            if not function:
+                raise IntegrationError(f"Alexa operation {method} is unavailable")
+            result = function(*args)
+            return await result if hasattr(result, "__await__") else result
+        finally:
+            await login.close()
 
     async def action_play(self):
         return await self._call("play")
