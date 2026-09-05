@@ -20,11 +20,11 @@ class RoombaCloudTrackingTests(SimpleTestCase):
         self.assertEqual(
             location,
             {
-                "x": 26.0,
-                "y": 2.5,
+                "x": 2501.0,
+                "y": -146.0,
                 "heading": 90.0,
-                "raw_x": 12.5,
-                "raw_y": -3.0,
+                "raw_x": 1250.0,
+                "raw_y": -300.0,
                 "raw_units": "centimetres",
                 "source": "roomba_cloud_livemap",
             },
