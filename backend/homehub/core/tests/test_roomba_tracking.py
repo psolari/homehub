@@ -1,9 +1,11 @@
+import math
 from types import SimpleNamespace
 
 from django.test import SimpleTestCase
 
 from homehub.core.services.roomba_tracking import (
     build_roomba_state,
+    extract_livemap_position,
     extract_roomba_location,
 )
 
@@ -99,6 +101,45 @@ class RoombaTrackingStateTests(SimpleTestCase):
         self.assertEqual(state["tracking_status"], "live")
         self.assertEqual(state["location"]["raw_x"], 14.0)
         self.assertEqual(state["location"]["raw_y"], -8.0)
+
+    def test_livemap_position_uses_latest_sample(self):
+        location = extract_livemap_position(
+            {
+                "pos_update": {
+                    "cur_path": [
+                        13,
+                        -0.104733,
+                        -0.197565,
+                        -0.489053,
+                        5,
+                        -0.090486,
+                        -0.189392,
+                        0.039259,
+                        5,
+                        1784491542,
+                    ]
+                }
+            },
+            {},
+        )
+
+        self.assertIsNotNone(location)
+        self.assertAlmostEqual(location["raw_x"], -9.0486, places=4)
+        self.assertAlmostEqual(location["raw_y"], -18.9392, places=4)
+        self.assertAlmostEqual(
+            location["heading"],
+            math.degrees(0.039259),
+            places=4,
+        )
+        self.assertEqual(location["source"], "roomba_livemap")
+
+    def test_livemap_position_rejects_malformed_path(self):
+        self.assertIsNone(
+            extract_livemap_position(
+                {"pos_update": {"cur_path": [1, 2, 3]}},
+                {},
+            )
+        )
 
     def test_tracking_reports_waiting_until_pose_is_published(self):
         client = SimpleNamespace(
