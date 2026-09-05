@@ -137,6 +137,8 @@ def build_roomba_state(
     }
 
     bin_state = reported.get("bin")
+    cap = reported.get("cap")
+    pose_capability = cap.get("pose") if isinstance(cap, dict) else None
     return {
         "online": bool(getattr(client, "roomba_connected", True)),
         "status": "running" if phase in running_phases else "idle",
@@ -144,6 +146,7 @@ def build_roomba_state(
         "battery": reported.get("batPct"),
         "phase": phase,
         "mission": mission,
+        "pose_capability": pose_capability,
         "location": location,
         "tracking_status": "live" if location else "waiting_for_pose",
         "bin_full": bool(bin_state.get("full"))
@@ -329,7 +332,18 @@ class RoombaTrackingManager:
             except Device.DoesNotExist:
                 self.stop(session.device_id)
                 return
-            merged_state = {**(device.state or {}), **state}
+            previous_state = dict(device.state or {})
+            if (
+                not isinstance(state.get("location"), dict)
+                and isinstance(previous_state.get("location"), dict)
+                and previous_state["location"].get("source") == "roomba_cloud_livemap"
+            ):
+                state["location"] = previous_state["location"]
+                state["tracking_status"] = "live_cloud"
+                if "cloud_tracking" in previous_state:
+                    state["cloud_tracking"] = previous_state["cloud_tracking"]
+
+            merged_state = {**previous_state, **state}
             device.state = merged_state
             device.is_online = bool(state.get("online", True))
             device.status = str(state.get("status") or device.status)
