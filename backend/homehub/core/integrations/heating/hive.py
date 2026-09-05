@@ -2,6 +2,7 @@ from homehub.core.integrations.base import BaseDriver, Control, IntegrationError
 from homehub.core.integrations.registry import register_driver
 from homehub.core.services.accounts import get_active_account, get_account_credentials
 from homehub.core.services.hive_client import (
+    close_hive_session,
     hive_device_identity,
     hive_devices,
     open_hive_session,
@@ -95,33 +96,48 @@ class HiveHeatingDriver(BaseDriver):
         return default
 
     async def get_state(self):
-        _, device = await self._device()
-        return {
-            "online": True,
-            "status": "on",
-            "power": "on",
-            "temperature": self._value(device, "current_temperature", "temperature", "currentTemperature"),
-            "target_temperature": self._value(device, "target_temperature", "target", "targetTemperature"),
-            "mode": self._value(device, "mode", "heating_mode", default="unknown"),
-            "boost": self._value(device, "boost", "boost_status"),
-        }
+        hive, device = await self._device()
+        try:
+            return {
+                "online": True,
+                "status": "on",
+                "power": "on",
+                "temperature": self._value(device, "current_temperature", "temperature", "currentTemperature"),
+                "target_temperature": self._value(device, "target_temperature", "target", "targetTemperature"),
+                "mode": self._value(device, "mode", "heating_mode", default="unknown"),
+                "boost": self._value(device, "boost", "boost_status"),
+            }
+        finally:
+            await close_hive_session(hive)
 
     async def action_target_temperature(self, value):
         hive, device = await self._device()
-        return await hive.heating.set_target_temperature(device, float(value))
+        try:
+            return await hive.heating.set_target_temperature(device, float(value))
+        finally:
+            await close_hive_session(hive)
 
     async def action_mode(self, value):
         hive, device = await self._device()
-        return await hive.heating.set_mode(device, str(value).upper())
+        try:
+            return await hive.heating.set_mode(device, str(value).upper())
+        finally:
+            await close_hive_session(hive)
 
     async def action_boost(self, minutes=30, temperature=22):
         hive, device = await self._device()
-        return await hive.heating.set_boost_on(
-            device,
-            mins=int(minutes),
-            temp=float(temperature),
-        )
+        try:
+            return await hive.heating.set_boost_on(
+                device,
+                mins=int(minutes),
+                temp=float(temperature),
+            )
+        finally:
+            await close_hive_session(hive)
 
     async def action_boost_off(self):
         hive, device = await self._device()
-        return await hive.heating.set_boost_off(device)
+        try:
+            return await hive.heating.set_boost_off(device)
+        finally:
+            await close_hive_session(hive)
