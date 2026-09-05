@@ -724,24 +724,30 @@ export default function SpotifyPage() {
               max="100"
               value={outputVolume}
               disabled={!outputSupportsVolume}
-              onChange={(event) =>
+              onChange={(event) => {
+                const volume = Number(event.target.value);
                 setData((currentData) =>
                   currentData
                     ? {
                         ...currentData,
+                        outputs: currentData.outputs.map((output) =>
+                          outputId(output) === selectedOutput
+                            ? { ...output, volume_percent: volume }
+                            : output,
+                        ),
                         playback: {
                           ...currentData.playback,
                           device: currentData.playback.device
                             ? {
                                 ...currentData.playback.device,
-                                volume_percent: Number(event.target.value),
+                                volume_percent: volume,
                               }
                             : currentData.playback.device,
                         },
                       }
                     : currentData,
-                )
-              }
+                );
+              }}
               onPointerUp={(event) => void setVolume(Number((event.target as HTMLInputElement).value))}
               className="w-24 accent-emerald-500 disabled:opacity-30"
             />
