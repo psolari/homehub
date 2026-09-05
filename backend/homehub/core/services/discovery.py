@@ -243,39 +243,43 @@ def _discover_hive_account(account) -> list[Candidate]:
         hive_devices,
         is_hive_heating_device,
         open_hive_session,
+        close_hive_session,
     )
 
     async def discover():
         credentials = get_credentials(account)
         hive = await open_hive_session(credentials)
-        result: list[Candidate] = []
-        for device in hive_devices(hive):
-            if not is_hive_heating_device(device):
-                continue
+        try:
+            result: list[Candidate] = []
+            for device in hive_devices(hive):
+                if not is_hive_heating_device(device):
+                    continue
 
-            device_id = hive_device_identity(device)
-            if not device_id:
-                continue
+                device_id = hive_device_identity(device)
+                if not device_id:
+                    continue
 
-            result.append(
-                Candidate(
-                    unique_id=f"hive:{device_id}",
-                    name=hive_device_name(device),
-                    device_type="thermostat",
-                    model="hive_heating",
-                    manufacturer="Hive",
-                    source="cloud",
-                    config={
-                        "account_id": account.id,
-                        "hive_device_id": device_id,
-                    },
-                    discovery_data={
-                        "method": "hive_cloud",
-                        "descriptor": hive_device_descriptor(device),
-                    },
+                result.append(
+                    Candidate(
+                        unique_id=f"hive:{device_id}",
+                        name=hive_device_name(device),
+                        device_type="thermostat",
+                        model="hive_heating",
+                        manufacturer="Hive",
+                        source="cloud",
+                        config={
+                            "account_id": account.id,
+                            "hive_device_id": device_id,
+                        },
+                        discovery_data={
+                            "method": "hive_cloud",
+                            "descriptor": hive_device_descriptor(device),
+                        },
+                    )
                 )
-            )
-        return result
+            return result
+        finally:
+            await close_hive_session(hive)
 
     return run_async(discover())
 
@@ -296,27 +300,30 @@ def _discover_alexa_account(account) -> list[Candidate]:
                 outputpath=None,
                 otp_secret=credentials.get("otp_secret"),
             )
-            await login.login(cookies=credentials.get("cookies"))
-            devices = await AlexaAPI.get_devices(login)
-            result: list[Candidate] = []
-            for device in devices or []:
-                serial = device.get("serialNumber") or device.get("serial_number")
-                if not serial:
-                    continue
-                result.append(
-                    Candidate(
-                        unique_id=f"alexa:{serial}",
-                        name=device.get("accountName") or device.get("name") or "Alexa",
-                        device_type="speaker",
-                        model="alexa_echo",
-                        manufacturer="Amazon",
-                        hardware_model=device.get("deviceType") or "",
-                        source="cloud",
-                        config={"account_id": account.id, "serial_number": serial},
-                        discovery_data={"method": "alexa_cloud", "device_family": device.get("deviceFamily")},
+            try:
+                await login.login(cookies=credentials.get("cookies"))
+                devices = await AlexaAPI.get_devices(login)
+                result: list[Candidate] = []
+                for device in devices or []:
+                    serial = device.get("serialNumber") or device.get("serial_number")
+                    if not serial:
+                        continue
+                    result.append(
+                        Candidate(
+                            unique_id=f"alexa:{serial}",
+                            name=device.get("accountName") or device.get("name") or "Alexa",
+                            device_type="speaker",
+                            model="alexa_echo",
+                            manufacturer="Amazon",
+                            hardware_model=device.get("deviceType") or "",
+                            source="cloud",
+                            config={"account_id": account.id, "serial_number": serial},
+                            discovery_data={"method": "alexa_cloud", "device_family": device.get("deviceFamily")},
+                        )
                     )
-                )
-            return result
+                return result
+            finally:
+                await login.close()
         except Exception:
             return []
 
