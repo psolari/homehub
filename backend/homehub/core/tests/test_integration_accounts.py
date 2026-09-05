@@ -1,4 +1,5 @@
-from unittest.mock import patch
+from types import SimpleNamespace
+from unittest.mock import AsyncMock, patch
 
 from django.test import TestCase
 from rest_framework.test import APIClient
@@ -80,6 +81,42 @@ class IntegrationAccountConnectionTests(TestCase):
         self.assertEqual(response.status_code, 200)
         self.account.refresh_from_db()
         self.assertEqual(self.account.status, "disconnected")
+
+
+
+class IRobotIntegrationAccountTests(TestCase):
+    @patch("roombapy_prime.auth.login", new_callable=AsyncMock)
+    def test_irobot_account_validation_counts_visible_robots(self, login):
+        login.return_value = SimpleNamespace(
+            robots={
+                "BLID-1": SimpleNamespace(),
+                "BLID-2": SimpleNamespace(),
+            }
+        )
+        account = IntegrationAccount.objects.create(
+            provider="irobot",
+            name="Default",
+        )
+        set_credentials(
+            account,
+            {
+                "username": "user@example.com",
+                "password": "secret",
+                "country_code": "GB",
+            },
+        )
+
+        from homehub.core.services.integration_accounts import (
+            validate_integration_account,
+        )
+
+        result = validate_integration_account(account)
+
+        self.assertEqual(result["provider_devices_seen"], 2)
+        self.assertEqual(result["robot_blids"], ["BLID-1", "BLID-2"])
+        self.assertIn("verified_at", result)
+        args = login.await_args.args
+        self.assertEqual(args[1:], ("user@example.com", "secret", "GB"))
 
 
 class VerifiedCloudDiscoveryTests(TestCase):
