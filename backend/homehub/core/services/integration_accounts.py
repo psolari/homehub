@@ -8,7 +8,11 @@ from django.utils import timezone
 from homehub.core.models import IntegrationAccount
 from homehub.core.services.accounts import get_credentials, set_credentials
 from homehub.core.services.devices import run_async
-from homehub.core.services.hive_client import hive_devices, open_hive_session
+from homehub.core.services.hive_client import (
+    close_hive_session,
+    hive_devices,
+    open_hive_session,
+)
 from homehub.core.services.ring_client import (
     close_ring_session,
     open_ring_session,
@@ -33,11 +37,14 @@ def _validate_hive(credentials: dict[str, Any]) -> dict[str, Any]:
 
     async def validate():
         hive = await open_hive_session(credentials)
-        devices = hive_devices(hive)
-        return {
-            "message": "Hive account authenticated successfully.",
-            "provider_devices_seen": len(devices),
-        }
+        try:
+            devices = hive_devices(hive)
+            return {
+                "message": "Hive account authenticated successfully.",
+                "provider_devices_seen": len(devices),
+            }
+        finally:
+            await close_hive_session(hive)
 
     return run_async(validate())
 
@@ -55,11 +62,44 @@ def _validate_alexa(credentials: dict[str, Any]) -> dict[str, Any]:
             outputpath=None,
             otp_secret=credentials.get("otp_secret"),
         )
-        await login.login(cookies=credentials.get("cookies"))
-        devices = await AlexaAPI.get_devices(login)
+        try:
+            await login.login(cookies=credentials.get("cookies"))
+            devices = await AlexaAPI.get_devices(login)
+            return {
+                "message": "Amazon Alexa account authenticated successfully.",
+                "provider_devices_seen": len(devices or []),
+            }
+        finally:
+            await login.close()
+
+    return run_async(validate())
+
+
+def _validate_irobot(credentials: dict[str, Any]) -> dict[str, Any]:
+    _require(credentials, "username", "password")
+
+    async def validate():
+        import aiohttp
+        from roombapy_prime.auth import login
+
+        country_code = str(credentials.get("country_code") or "GB").strip().upper()
+        if len(country_code) != 2:
+            raise IntegrationAccountError("iRobot country_code must be a two-letter country code.")
+
+        timeout = aiohttp.ClientTimeout(total=35)
+        async with aiohttp.ClientSession(timeout=timeout) as session:
+            result = await login(
+                session,
+                str(credentials["username"]).strip(),
+                str(credentials["password"]),
+                country_code,
+            )
+
+        robots = getattr(result, "robots", {}) or {}
         return {
-            "message": "Amazon Alexa account authenticated successfully.",
-            "provider_devices_seen": len(devices or []),
+            "message": "iRobot account authenticated successfully.",
+            "provider_devices_seen": len(robots),
+            "robot_blids": sorted(str(blid) for blid in robots),
         }
 
     return run_async(validate())
@@ -137,6 +177,7 @@ def _validate_ring_alarm_mqtt(credentials: dict[str, Any]) -> dict[str, Any]:
 def validate_integration_account(account: IntegrationAccount) -> dict[str, Any]:
     credentials = get_credentials(account)
     validators = {
+        "irobot": lambda: _validate_irobot(credentials),
         "hive": lambda: _validate_hive(credentials),
         "alexa": lambda: _validate_alexa(credentials),
         "ring": lambda: _validate_ring(account, credentials),
