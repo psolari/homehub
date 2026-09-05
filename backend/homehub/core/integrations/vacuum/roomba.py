@@ -2,6 +2,7 @@ import time
 
 from homehub.core.integrations.base import BaseDriver, Control, IntegrationError
 from homehub.core.integrations.registry import register_driver
+from homehub.core.services.roomba_cloud_tracking import roomba_cloud_tracking_manager
 from homehub.core.services.roomba_tracking import (
     build_roomba_state,
     roomba_tracking_manager,
@@ -31,6 +32,13 @@ class RoombaDriver(BaseDriver):
             "secret": True,
             "description": "The robot-local password. HomeHub can try to retrieve this during setup.",
         },
+        {
+            "name": "irobot_account_id",
+            "label": "iRobot cloud account",
+            "type": "number",
+            "required": False,
+            "description": "Optional. Used for live-map position tracking when newer firmware no longer publishes local pose data.",
+        },
         {"name": "map_scale_x", "label": "Floor-plan X scale", "type": "number", "default": 1},
         {"name": "map_scale_y", "label": "Floor-plan Y scale", "type": "number", "default": 1},
         {"name": "map_offset_x", "label": "Floor-plan X offset", "type": "number", "default": 0},
@@ -45,6 +53,14 @@ class RoombaDriver(BaseDriver):
             "To retrieve the password automatically, hold the robot's HOME/CLEAN pairing button until it chimes and the Wi-Fi indicator flashes, then immediately click Retrieve password.",
             "Some newer iRobot firmware does not expose the password locally. In that case, enter credentials obtained from a compatible iRobot credential tool instead.",
         ],
+        "optional_accounts": [
+            {
+                "provider": "irobot",
+                "field": "irobot_account_id",
+                "label": "iRobot cloud account",
+                "description": "Recommended for newer SMART-tier Roombas. Local controls remain local; the cloud account supplies live floor-plan position when the firmware omits local pose data.",
+            }
+        ],
         "actions": [
             {
                 "key": "retrieve_password",
@@ -55,7 +71,7 @@ class RoombaDriver(BaseDriver):
             }
         ],
         "test_connection": True,
-        "advanced_fields": ["map_scale_x", "map_scale_y", "map_offset_x", "map_offset_y"],
+        "advanced_fields": ["irobot_account_id", "map_scale_x", "map_scale_y", "map_offset_x", "map_offset_y"],
     }
     controls = [
         Control("start", "Start", group="cleaning"),
@@ -102,7 +118,34 @@ class RoombaDriver(BaseDriver):
     def _read_tracked(self):
         client = self._tracked_client()
         roomba_tracking_manager.wait_until_ready(self.device.id, timeout=2.5)
-        return build_roomba_state(client, self.config)
+        state = build_roomba_state(client, self.config)
+
+        # Newer SMART-tier firmware (notably cap.pose=2 i7-family robots)
+        # can keep local MQTT state/control working while omitting the old
+        # pose field entirely. In that case iRobot's cloud live-map stream is
+        # the authoritative source for the moving position.
+        try:
+            pose_capability = int(state.get("pose_capability") or 0)
+        except (TypeError, ValueError):
+            pose_capability = 0
+
+        if not state.get("location") and pose_capability >= 2:
+            roomba_cloud_tracking_manager.ensure(self.device, self.config)
+            cloud_location = roomba_cloud_tracking_manager.location(self.device.id)
+            cloud = roomba_cloud_tracking_manager.diagnostics(
+                self.device.id,
+                config=self.config,
+            )
+            if cloud_location:
+                state["location"] = cloud_location
+                state["tracking_status"] = "live_cloud"
+            elif cloud.get("configured"):
+                state["tracking_status"] = "waiting_for_cloud_position"
+            else:
+                state["tracking_status"] = "cloud_account_required"
+            state["cloud_tracking_status"] = cloud.get("status")
+
+        return state
 
     async def get_state(self):
         return await self.to_thread(self._read_tracked)
