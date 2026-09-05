@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 import logging
+import math
 import threading
 import time
 from typing import Any
@@ -112,6 +113,48 @@ def extract_roomba_location(
     }
 
 
+def extract_livemap_position(
+    message: dict[str, Any],
+    config: dict[str, Any],
+) -> dict[str, Any] | None:
+    """Parse the newer pos_update.cur_path live-map payload when present."""
+    pos_update = message.get("pos_update")
+    if not isinstance(pos_update, dict):
+        return None
+    cur_path = pos_update.get("cur_path")
+    if not isinstance(cur_path, list) or len(cur_path) < 6:
+        return None
+    if (len(cur_path) - 2) % 4 != 0:
+        return None
+
+    values = cur_path[1:-1]
+    if len(values) < 4:
+        return None
+    x, y, orientation, _operating_mode = values[-4:]
+    try:
+        # The live-map stream reports metres/radians. Convert to the
+        # centimetre-like scale used by HomeHub's existing Roomba anchor UI.
+        raw_x = float(x) * 100.0
+        raw_y = float(y) * 100.0
+        heading = math.degrees(float(orientation))
+    except (TypeError, ValueError):
+        return None
+
+    scale_x = float(config.get("map_scale_x", 1) or 1)
+    scale_y = float(config.get("map_scale_y", 1) or 1)
+    offset_x = float(config.get("map_offset_x", 0) or 0)
+    offset_y = float(config.get("map_offset_y", 0) or 0)
+    return {
+        "x": raw_x * scale_x + offset_x,
+        "y": raw_y * scale_y + offset_y,
+        "heading": heading,
+        "raw_x": raw_x,
+        "raw_y": raw_y,
+        "raw_units": "centimetres",
+        "source": "roomba_livemap",
+    }
+
+
 def build_roomba_state(
     client,
     config: dict[str, Any],
@@ -167,6 +210,9 @@ class _RoombaSession:
     message_count: int = 0
     last_message_at: float | None = None
     last_message_keys: list[str] = field(default_factory=list)
+    message_key_counts: dict[str, int] = field(default_factory=dict)
+    stream_location: dict[str, Any] | None = None
+    position_message_count: int = 0
 
 
 class RoombaTrackingManager:
@@ -229,6 +275,16 @@ class RoombaTrackingManager:
                 if isinstance(message, dict)
                 else []
             )
+            if isinstance(message, dict):
+                for key in message:
+                    name = str(key)
+                    session.message_key_counts[name] = (
+                        session.message_key_counts.get(name, 0) + 1
+                    )
+                position = extract_livemap_position(message, session.config)
+                if position:
+                    session.stream_location = position
+                    session.position_message_count += 1
             try:
                 self._persist(session)
             except Exception:
@@ -272,7 +328,11 @@ class RoombaTrackingManager:
             session = self._sessions.get(device_id)
         if not session:
             return None
-        return build_roomba_state(session.client, session.config)
+        state = build_roomba_state(session.client, session.config)
+        if not state.get("location") and session.stream_location:
+            state["location"] = dict(session.stream_location)
+            state["tracking_status"] = "live"
+        return state
 
     def client(self, device_id: int):
         with self._lock:
@@ -305,6 +365,9 @@ class RoombaTrackingManager:
                 else None
             ),
             "last_message_keys": session.last_message_keys,
+            "message_key_counts": dict(session.message_key_counts),
+            "position_message_count": session.position_message_count,
+            "stream_location": session.stream_location,
             "reported_keys": sorted(str(key) for key in reported.keys()),
             "pose_capability": cap.get("pose") if isinstance(cap, dict) else None,
             "reported_pose": reported.get("pose"),
@@ -322,6 +385,9 @@ class RoombaTrackingManager:
             return
 
         state = build_roomba_state(session.client, session.config)
+        if not state.get("location") and session.stream_location:
+            state["location"] = dict(session.stream_location)
+            state["tracking_status"] = "live"
         location = state.get("location")
         session.last_write = now
 
