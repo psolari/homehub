@@ -99,7 +99,6 @@ def _validate_irobot(credentials: dict[str, Any]) -> dict[str, Any]:
         return {
             "message": "iRobot account authenticated successfully.",
             "provider_devices_seen": len(robots),
-            "robot_blids": sorted(str(blid) for blid in robots),
         }
 
     return run_async(validate())
