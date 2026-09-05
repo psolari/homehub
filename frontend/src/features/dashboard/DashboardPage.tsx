@@ -59,7 +59,11 @@ export default function DashboardPage() {
     null,
   );
   const [layoutSaving, setLayoutSaving] = useState(false);
+  const [initialLoading, setInitialLoading] = useState(true);
+  const [hydratingIds, setHydratingIds] = useState<Set<number>>(new Set());
   const interaction = useRef<LayoutInteraction | null>(null);
+  const refreshInFlight = useRef(false);
+  const hasLoadedSnapshot = useRef(false);
   const sectionRefs = useRef(
     new Map<string, HTMLDivElement>(),
   );
@@ -77,30 +81,59 @@ export default function DashboardPage() {
     };
 
     const refresh = async () => {
+      if (refreshInFlight.current) return;
+      refreshInFlight.current = true;
+      const firstSnapshot = !hasLoadedSnapshot.current;
+
       try {
         const current = await get<Device[]>("/devices/");
-        const refreshed = await Promise.all(
+        if (cancelled) return;
+
+        // Render the persisted dashboard immediately. Live device I/O happens
+        // afterwards so one slow integration can never hold the whole page blank.
+        setDevices(current);
+        setInitialLoading(false);
+        if (firstSnapshot) {
+          hasLoadedSnapshot.current = true;
+          setHydratingIds(new Set(current.map((device) => device.id)));
+        }
+
+        await Promise.allSettled(
           current.map(async (device) => {
             try {
-              return (
+              const next = (
                 await post<{ device: Device }>(
                   `/devices/${device.id}/refresh/`,
                 )
               ).device;
+              if (!cancelled) {
+                setDevices((items) =>
+                  items.map((item) => (item.id === next.id ? next : item)),
+                );
+              }
             } catch {
-              return device;
+              // The backend preserves the last-known-good state through short failures.
+            } finally {
+              if (firstSnapshot && !cancelled) {
+                setHydratingIds((ids) => {
+                  const next = new Set(ids);
+                  next.delete(device.id);
+                  return next;
+                });
+              }
             }
           }),
         );
-        if (!cancelled) setDevices(refreshed);
       } catch {
-        // Keep the last-known state if the backend is temporarily unavailable.
+        if (firstSnapshot && !cancelled) setInitialLoading(false);
+      } finally {
+        refreshInFlight.current = false;
       }
     };
 
     void loadGroups();
     void refresh();
-    const timer = window.setInterval(() => void refresh(), 8000);
+    const timer = window.setInterval(() => void refresh(), 10000);
 
     return () => {
       cancelled = true;
@@ -437,7 +470,9 @@ export default function DashboardPage() {
         </div>
       )}
 
-      {!shown.length ? (
+      {initialLoading ? (
+        <DashboardSkeleton />
+      ) : !shown.length ? (
         <div className="rounded-2xl border border-dashed border-zinc-700 p-16 text-center text-zinc-500">
           Add a device from the Devices page and it will appear here automatically.
         </div>
@@ -538,6 +573,7 @@ export default function DashboardPage() {
                     if (!card) return null;
                     const tone = statusTone(device);
                     const active = deviceIsActive(device);
+                    const hydrating = hydratingIds.has(device.id);
 
                     return (
                       <article
@@ -549,6 +585,8 @@ export default function DashboardPage() {
                         onPointerUp={(event) => void endInteraction(event)}
                         onPointerCancel={(event) => void endInteraction(event)}
                         className={`relative min-h-0 overflow-hidden rounded-3xl border shadow-xl transition ${
+                          hydrating ? "animate-pulse" : ""
+                        } ${
                           editLayout
                             ? "cursor-grab select-none ring-1 ring-cyan-900/20 active:cursor-grabbing"
                             : ""
@@ -733,6 +771,31 @@ export default function DashboardPage() {
         }}
       />
     </div>
+  );
+}
+
+function DashboardSkeleton() {
+  return (
+    <section className="rounded-3xl border border-zinc-800/80 bg-zinc-950/30 p-4">
+      <div className="mb-4">
+        <div className="h-5 w-20 animate-pulse rounded bg-zinc-800" />
+        <div className="mt-2 h-3 w-16 animate-pulse rounded bg-zinc-900" />
+      </div>
+      <div className="grid grid-cols-12 gap-3">
+        {[0, 1, 2].map((index) => (
+          <div
+            key={index}
+            className="col-span-12 h-48 animate-pulse rounded-3xl border border-zinc-800 bg-zinc-900/70 md:col-span-6 xl:col-span-4"
+          >
+            <div className="p-5">
+              <div className="h-5 w-32 rounded bg-zinc-800" />
+              <div className="mt-3 h-3 w-20 rounded bg-zinc-800/70" />
+              <div className="mt-8 h-9 w-40 rounded-xl bg-zinc-800/60" />
+            </div>
+          </div>
+        ))}
+      </div>
+    </section>
   );
 }
 
