@@ -37,6 +37,7 @@ from homehub.core.services.accounts import get_active_account, get_credentials
 from homehub.core.services.device_config import get_device_credentials
 from homehub.core.services.integration_accounts import validate_integration_account
 from homehub.core.services.ring_live import ring_live_view_manager
+from homehub.core.services.roomba_cloud_tracking import roomba_cloud_tracking_manager
 from homehub.core.services.roomba_tracking import roomba_tracking_manager
 from homehub.core.services.devices import (
     create_device,
@@ -461,12 +462,17 @@ class DeviceViewSet(OpenViewSet):
         # Ensure the persistent MQTT session has been started before reporting
         # diagnostics. refresh_device intentionally tolerates temporary failures.
         refresh_device(device)
+        driver = driver_for(device)
         return Response(
             {
                 "device_id": device.id,
                 "device_name": device.name,
                 "stored_state": Device.objects.get(pk=device.id).state,
                 "tracking": roomba_tracking_manager.diagnostics(device.id),
+                "cloud_tracking": roomba_cloud_tracking_manager.diagnostics(
+                    device.id,
+                    config=driver.config,
+                ),
             }
         )
 
