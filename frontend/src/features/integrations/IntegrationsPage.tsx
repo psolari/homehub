@@ -25,6 +25,7 @@ type DiscoverResponse = { devices: unknown[]; count: number };
 const mdiPaths = mdi as unknown as Record<string, string>;
 const PROVIDER_ICONS: Record<string, string> = {
   spotify: "mdiSpotify",
+  vacuum: "mdiRobotVacuum",
   heating: "mdiRadiator",
   doorbell: "mdiDoorbellVideo",
   speaker: "mdiSpeakerWireless",
