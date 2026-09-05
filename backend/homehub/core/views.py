@@ -37,6 +37,7 @@ from homehub.core.services.accounts import get_active_account, get_credentials
 from homehub.core.services.device_config import get_device_credentials
 from homehub.core.services.integration_accounts import validate_integration_account
 from homehub.core.services.ring_live import ring_live_view_manager
+from homehub.core.services.roomba_tracking import roomba_tracking_manager
 from homehub.core.services.devices import (
     create_device,
     driver_for,
@@ -446,6 +447,27 @@ class DeviceViewSet(OpenViewSet):
     def locations(self, request, pk=None):
         return Response(
             DeviceLocationSerializer(self.get_object().location_history.all()[:500], many=True).data
+        )
+
+    @action(detail=True, methods=["get"], url_path="tracking-diagnostics")
+    def tracking_diagnostics(self, request, pk=None):
+        device = self.get_object()
+        if device.model != "irobot_roomba":
+            return Response(
+                {"error": "Tracking diagnostics are only available for Roomba devices."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        # Ensure the persistent MQTT session has been started before reporting
+        # diagnostics. refresh_device intentionally tolerates temporary failures.
+        refresh_device(device)
+        return Response(
+            {
+                "device_id": device.id,
+                "device_name": device.name,
+                "stored_state": Device.objects.get(pk=device.id).state,
+                "tracking": roomba_tracking_manager.diagnostics(device.id),
+            }
         )
 
 
