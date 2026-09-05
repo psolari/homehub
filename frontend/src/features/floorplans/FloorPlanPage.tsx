@@ -1264,9 +1264,15 @@ function ObjectInspector({ object, device, onChange, onDuplicate, onDelete, onOp
           <div>
             <div className="text-xs font-semibold text-white">Live Roomba tracking</div>
             <div className="mt-1 text-[11px] leading-4 text-zinc-500">
-              {device.state?.tracking_status === "live"
-                ? "Receiving live pose updates from the Roomba."
-                : "Connected, but waiting for the Roomba to publish a pose. Start a cleaning mission to generate movement data."}
+              {["live", "live_cloud"].includes(String(device.state?.tracking_status || ""))
+                ? device.state?.tracking_status === "live_cloud"
+                  ? "Receiving live position updates from iRobot's live-map stream."
+                  : "Receiving live pose updates directly from the Roomba."
+                : device.state?.tracking_status === "cloud_account_required"
+                  ? "This Roomba firmware does not publish local pose data. Connect your iRobot account in Integrations to enable live floor-plan movement."
+                  : device.state?.tracking_status === "waiting_for_cloud_position"
+                    ? "Connected to iRobot and waiting for the live-map position stream. Start a cleaning mission if the robot is idle."
+                    : "Connected, but waiting for the Roomba to publish a pose. Start a cleaning mission to generate movement data."}
             </div>
           </div>
           <div className="grid grid-cols-2 gap-2">
