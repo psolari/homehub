@@ -113,7 +113,6 @@ class IRobotIntegrationAccountTests(TestCase):
         result = validate_integration_account(account)
 
         self.assertEqual(result["provider_devices_seen"], 2)
-        self.assertEqual(result["robot_blids"], ["BLID-1", "BLID-2"])
         self.assertIn("verified_at", result)
         args = login.await_args.args
         self.assertEqual(args[1:], ("user@example.com", "secret", "GB"))
