@@ -19,6 +19,7 @@ type SpotifyMedia = {
 };
 
 type SpotifyOutput = {
+  output_id?: string | null;
   spotify_device_id?: string | null;
   name: string;
   type?: string;
@@ -31,6 +32,7 @@ type SpotifyOutput = {
   homehub_name?: string | null;
   homehub_model?: string | null;
   unavailable_reason?: string;
+  playback_mode?: "spotify_connect" | "remembered_connect" | "homehub" | "unavailable";
 };
 
 type SpotifyPlayback = {
@@ -81,6 +83,10 @@ type Tab = "home" | "playlists" | "podcasts" | "mixes" | "search";
 
 const paths = mdi as unknown as Record<string, string>;
 
+function outputId(output: SpotifyOutput) {
+  return output.output_id || output.spotify_device_id || "";
+}
+
 function formatDuration(ms?: number | null) {
   if (!ms) return "0:00";
   const seconds = Math.floor(ms / 1000);
@@ -119,8 +125,7 @@ export default function SpotifyPage() {
       if (
         current &&
         next.outputs.some(
-          (output) =>
-            output.spotify_device_id === current && output.available,
+          (output) => outputId(output) === current && output.available,
         )
       ) {
         return current;
@@ -131,14 +136,13 @@ export default function SpotifyPage() {
             (output) => output.spotify_device_id === activeDeviceId,
           )
         : undefined;
-      if (active?.spotify_device_id) return active.spotify_device_id;
+      if (active) return outputId(active);
       const homehub = next.outputs.find(
         (output) => output.available && output.homehub_device_id,
       );
-      if (homehub?.spotify_device_id) return homehub.spotify_device_id;
-      return (
-        next.outputs.find((output) => output.available)?.spotify_device_id || ""
-      );
+      if (homehub) return outputId(homehub);
+      const available = next.outputs.find((output) => output.available);
+      return available ? outputId(available) : "";
     });
   };
 
@@ -311,6 +315,13 @@ export default function SpotifyPage() {
   const progressPercent = current?.duration_ms
     ? Math.min(100, (data.playback.progress_ms / current.duration_ms) * 100)
     : 0;
+  const selectedOutputInfo = data.outputs.find(
+    (output) => outputId(output) === selectedOutput,
+  );
+  const outputVolume =
+    selectedOutputInfo?.volume_percent ?? data.playback.device?.volume_percent ?? 50;
+  const outputSupportsVolume =
+    selectedOutputInfo?.supports_volume ?? data.playback.device?.supports_volume ?? true;
 
   return (
     <div className="space-y-6 pb-40">
@@ -673,23 +684,37 @@ export default function SpotifyPage() {
               <select
                 value={selectedOutput}
                 onChange={(event) => {
-                  const output = data.outputs.find((item) => item.spotify_device_id === event.target.value);
-                  if (output?.available && output.spotify_device_id) void transfer(output.spotify_device_id);
+                  const target = event.target.value;
+                  const output = data.outputs.find(
+                    (item) => outputId(item) === target,
+                  );
+                  if (!output?.available || !target) return;
+
+                  setSelectedOutput(target);
+                  if (
+                    output.playback_mode !== "homehub" ||
+                    Boolean(data.playback.item?.uri)
+                  ) {
+                    void transfer(target);
+                  }
                 }}
                 className="w-full rounded-lg border border-zinc-700 bg-zinc-900 px-3 py-2 text-xs text-zinc-300"
               >
                 <option value="">Current Spotify output</option>
-                {data.outputs.map((output, index) => (
-                  <option
-                    key={output.spotify_device_id || `homehub-${output.homehub_device_id || index}`}
-                    value={output.spotify_device_id || ""}
-                    disabled={!output.available}
-                  >
-                    {output.homehub_device_id ? "HomeHub · " : ""}
-                    {output.name}
-                    {!output.available ? " — unavailable in Spotify Connect" : ""}
-                  </option>
-                ))}
+                {data.outputs.map((output, index) => {
+                  const target = outputId(output);
+                  return (
+                    <option
+                      key={target || `homehub-${output.homehub_device_id || index}`}
+                      value={target}
+                      disabled={!output.available}
+                    >
+                      {output.homehub_device_id ? "HomeHub · " : ""}
+                      {output.name}
+                      {!output.available ? " — activate once in Spotify" : ""}
+                    </option>
+                  );
+                })}
               </select>
             </div>
             <Icon path={paths.mdiVolumeHigh} size={0.65} className="text-zinc-500" />
@@ -697,8 +722,8 @@ export default function SpotifyPage() {
               type="range"
               min="0"
               max="100"
-              value={data.playback.device?.volume_percent ?? 50}
-              disabled={data.playback.device?.supports_volume === false}
+              value={outputVolume}
+              disabled={!outputSupportsVolume}
               onChange={(event) =>
                 setData((currentData) =>
                   currentData
