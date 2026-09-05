@@ -1,6 +1,7 @@
 aiowebostv>=0.10,<1
 samsungtvws>=2.7.2,<3
 roombapy>=1.9.2,<2
+roombapy-prime>=0.3.2,<1
 soco>=0.31.2,<1
 PyChromecast>=14.0.10,<15
 spotipy>=2.25,<3
