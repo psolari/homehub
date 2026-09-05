@@ -26,33 +26,66 @@ def _reported_state(client) -> dict[str, Any]:
     return reported if isinstance(reported, dict) else {}
 
 
+def _reported_pose(reported: dict[str, Any]) -> tuple[float, float, float] | None:
+    """Return pose coordinates using roombapy's map orientation.
+
+    Some robots update master_state before roombapy's compatibility co_ords
+    attribute. Reading the reported pose directly prevents a stale {0, 0}
+    co_ords placeholder from pinning the floor-plan marker in place.
+    """
+    for key in ("pose", "pose2"):
+        source = reported.get(key)
+        if not isinstance(source, dict):
+            continue
+
+        nested = source.get("pose")
+        if isinstance(nested, dict):
+            source = nested
+
+        point = source.get("point")
+        if not isinstance(point, dict):
+            point = source.get("position")
+        if not isinstance(point, dict):
+            point = source
+
+        try:
+            x = float(point["x"])
+            y = float(point["y"])
+            heading = float(
+                source.get("theta")
+                if source.get("theta") is not None
+                else source.get("heading", 0)
+            )
+        except (KeyError, TypeError, ValueError):
+            continue
+
+        # Match roombapy 1.9.x's public map orientation.
+        return y, x, heading
+
+    return None
+
+
 def extract_roomba_location(
     client,
     config: dict[str, Any],
 ) -> dict[str, Any] | None:
-    """Return Roomba map coordinates in the library's intended orientation.
-
-    roombapy 1.9.x deliberately swaps the robot's reported pose point x/y into
-    its co_ords map attribute. Prefer that public compatibility attribute once
-    a pose has actually been received rather than re-parsing the raw payload in
-    a different orientation.
-    """
+    """Return the latest Roomba coordinates transformed for HomeHub."""
     reported = _reported_state(client)
-    pose = reported.get("pose")
-    pose2 = reported.get("pose2")
-    has_pose = isinstance(pose, dict) or isinstance(pose2, dict)
+    pose_values = _reported_pose(reported)
 
-    raw_x: float
-    raw_y: float
-    heading: float
-
-    coords = getattr(client, "co_ords", None)
-    has_coords = (
-        isinstance(coords, dict)
-        and coords.get("x") is not None
-        and coords.get("y") is not None
-    )
-    if has_coords:
+    # Prefer the raw reported pose. On some Roomba generations roombapy's
+    # co_ords compatibility attribute remains at its initial zero value even
+    # while master_state is receiving live pose updates.
+    if pose_values is not None:
+        raw_x, raw_y, heading = pose_values
+    else:
+        coords = getattr(client, "co_ords", None)
+        if (
+            not isinstance(coords, dict)
+            or coords.get("x") is None
+            or coords.get("y") is None
+        ):
+            return None
         try:
             raw_x = float(coords["x"])
             raw_y = float(coords["y"])
@@ -60,22 +93,8 @@ def extract_roomba_location(
         except (TypeError, ValueError):
             return None
 
-        # roombapy can publish its public co_ords before a complete pose object
-        # has been merged into master_state. Ignore only the library's initial
-        # zero placeholder, not a real moving coordinate.
-        if not has_pose and raw_x == 0 and raw_y == 0:
-            return None
-    elif has_pose:
-        source = pose if isinstance(pose, dict) else pose2
-        point = source.get("point", source) if isinstance(source, dict) else {}
-        if not isinstance(point, dict):
-            return None
-        try:
-            # Match roombapy 1.9.x's map orientation.
-            raw_x = float(point["y"])
-            raw_y = float(point["x"])
-            heading = float(source.get("theta") or 0)
-        except (KeyError, TypeError, ValueError):
+        # roombapy initializes co_ords to 0/0 before any pose message arrives.
+        if raw_x == 0 and raw_y == 0:
             return None
 
     scale_x = float(config.get("map_scale_x", 1) or 1)
@@ -142,6 +161,9 @@ class _RoombaSession:
     ready: threading.Event = field(default_factory=threading.Event)
     last_location: tuple[float, float, float] | None = None
     last_write: float = 0.0
+    message_count: int = 0
+    last_message_at: float | None = None
+    last_message_keys: list[str] = field(default_factory=list)
 
 
 class RoombaTrackingManager:
@@ -194,8 +216,16 @@ class RoombaTrackingManager:
             config=dict(config),
         )
 
-        def on_message(*_args) -> None:
+        def on_message(*args) -> None:
             session.ready.set()
+            session.message_count += 1
+            session.last_message_at = time.time()
+            message = args[0] if args else None
+            session.last_message_keys = (
+                sorted(str(key) for key in message.keys())
+                if isinstance(message, dict)
+                else []
+            )
             try:
                 self._persist(session)
             except Exception:
@@ -245,6 +275,43 @@ class RoombaTrackingManager:
         with self._lock:
             session = self._sessions.get(device_id)
         return session.client if session else None
+
+    def diagnostics(self, device_id: int) -> dict[str, Any]:
+        with self._lock:
+            session = self._sessions.get(device_id)
+        if not session:
+            return {
+                "session_exists": False,
+                "tracking_status": "not_started",
+            }
+
+        client = session.client
+        reported = _reported_state(client)
+        state = build_roomba_state(client, session.config)
+        cap = reported.get("cap")
+        now = time.time()
+
+        return {
+            "session_exists": True,
+            "connected": bool(getattr(client, "roomba_connected", False)),
+            "ready": session.ready.is_set(),
+            "message_count": session.message_count,
+            "seconds_since_message": (
+                round(now - session.last_message_at, 2)
+                if session.last_message_at is not None
+                else None
+            ),
+            "last_message_keys": session.last_message_keys,
+            "reported_keys": sorted(str(key) for key in reported.keys()),
+            "pose_capability": cap.get("pose") if isinstance(cap, dict) else None,
+            "reported_pose": reported.get("pose"),
+            "reported_pose2": reported.get("pose2"),
+            "roombapy_coords": getattr(client, "co_ords", None),
+            "phase": state.get("phase"),
+            "tracking_status": state.get("tracking_status"),
+            "location": state.get("location"),
+            "last_persisted_location": session.last_location,
+        }
 
     def _persist(self, session: _RoombaSession) -> None:
         now = time.monotonic()
