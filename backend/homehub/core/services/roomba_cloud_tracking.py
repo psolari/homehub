@@ -161,13 +161,10 @@ class RoombaCloudTrackingManager:
                             continue
 
                         sample = message.updates[-1]
-                        raw_x = float(sample.point[0]) * 100.0
-                        raw_y = float(sample.point[1]) * 100.0
-                        heading = math.degrees(float(sample.orientation))
                         location = self._location(
-                            raw_x,
-                            raw_y,
-                            heading,
+                            float(sample.point[0]),
+                            float(sample.point[1]),
+                            math.degrees(float(sample.orientation)),
                             session.config,
                         )
                         session.position_count += 1
@@ -198,11 +195,17 @@ class RoombaCloudTrackingManager:
 
     @staticmethod
     def _location(
-        raw_x: float,
-        raw_y: float,
+        metre_x: float,
+        metre_y: float,
         heading: float,
         config: dict[str, Any],
     ) -> dict[str, Any]:
+        # The cloud live-map wire format uses metres. HomeHub's existing
+        # Roomba floor-plan calibration is based on the classic pose scale,
+        # so expose centimetres to keep the coordinate magnitude practical
+        # and consistent with the local tracking path.
+        raw_x = metre_x * 100.0
+        raw_y = metre_y * 100.0
         scale_x = float(config.get("map_scale_x", 1) or 1)
         scale_y = float(config.get("map_scale_y", 1) or 1)
         offset_x = float(config.get("map_offset_x", 0) or 0)
