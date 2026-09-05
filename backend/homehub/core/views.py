@@ -518,6 +518,42 @@ class SpotifyPlayerViewSet(viewsets.ViewSet):
             raise RuntimeError(account.error)
         return service
 
+    @staticmethod
+    def _homehub_target_id(value):
+        target = str(value or "")
+        if not target.startswith("homehub:"):
+            return None
+        try:
+            return int(target.split(":", 1)[1])
+        except (TypeError, ValueError):
+            raise RuntimeError("Invalid HomeHub Spotify output.")
+
+    def _homehub_speaker(self, value):
+        device_id = self._homehub_target_id(value)
+        if device_id is None:
+            return None
+        speaker = Device.objects.filter(pk=device_id, device_type="speaker").first()
+        if not speaker:
+            raise RuntimeError("The selected HomeHub speaker no longer exists.")
+        return speaker
+
+    @staticmethod
+    def _supports_local_spotify(speaker):
+        try:
+            driver_class = get_driver(speaker.device_type, speaker.model)
+        except Exception:
+            return False
+        return bool(getattr(driver_class, "supports_spotify_output", False))
+
+    def _play_homehub_spotify(self, speaker, uri):
+        driver = driver_for(speaker)
+        play_uri = getattr(driver, "play_spotify_uri", None)
+        if not play_uri:
+            raise RuntimeError(
+                f"{speaker.name} cannot start Spotify locally and is not currently available through Spotify Connect."
+            )
+        return run_async(play_uri(uri))
+
     def _outputs(self, service):
         spotify_devices = service.devices()
         homehub_speakers = list(Device.objects.filter(device_type="speaker").order_by("name"))
@@ -545,9 +581,22 @@ class SpotifyPlayerViewSet(viewsets.ViewSet):
 
             if matched:
                 matched_homehub.add(matched.id)
+                if spotify_id:
+                    # Remember Connect IDs when Spotify exposes a HomeHub speaker.
+                    # The Web API device list is intentionally transient, so this
+                    # keeps the target usable after it drops out of that list.
+                    remembered = {
+                        **(matched.config or {}),
+                        "spotify_device_id": str(spotify_id),
+                        "spotify_device_name": spotify_name,
+                    }
+                    if remembered != (matched.config or {}):
+                        Device.objects.filter(pk=matched.id).update(config=remembered)
+                        matched.config = remembered
 
             outputs.append(
                 {
+                    "output_id": str(spotify_id or ""),
                     "spotify_device_id": spotify_id,
                     "name": spotify_name,
                     "type": item.get("type"),
@@ -559,26 +608,56 @@ class SpotifyPlayerViewSet(viewsets.ViewSet):
                     "homehub_device_id": matched.id if matched else None,
                     "homehub_name": matched.name if matched else None,
                     "homehub_model": matched.model if matched else None,
+                    "playback_mode": "spotify_connect",
                 }
             )
 
         for speaker in homehub_speakers:
             if speaker.id in matched_homehub:
                 continue
+
+            config = speaker.config or {}
+            configured_id = str(config.get("spotify_device_id") or "").strip()
+            local_spotify = self._supports_local_spotify(speaker)
+
+            if local_spotify:
+                output_id = f"homehub:{speaker.id}"
+                spotify_device_id = None
+                available = True
+                playback_mode = "homehub"
+                unavailable_reason = ""
+            elif configured_id:
+                output_id = configured_id
+                spotify_device_id = configured_id
+                available = True
+                playback_mode = "remembered_connect"
+                unavailable_reason = ""
+            else:
+                output_id = f"homehub:{speaker.id}"
+                spotify_device_id = None
+                available = False
+                playback_mode = "unavailable"
+                unavailable_reason = (
+                    "Spotify Connect has not exposed this speaker yet. Start Spotify on "
+                    "the speaker once, then refresh HomeHub so its Connect ID can be remembered."
+                )
+
             outputs.append(
                 {
-                    "spotify_device_id": None,
+                    "output_id": output_id,
+                    "spotify_device_id": spotify_device_id,
                     "name": speaker.name,
                     "type": "speaker",
                     "is_active": False,
                     "is_restricted": False,
                     "volume_percent": speaker.state.get("volume") if speaker.state else None,
-                    "supports_volume": False,
-                    "available": False,
+                    "supports_volume": bool(local_spotify or configured_id),
+                    "available": available,
                     "homehub_device_id": speaker.id,
                     "homehub_name": speaker.name,
                     "homehub_model": speaker.model,
-                    "unavailable_reason": "This HomeHub speaker is not currently exposed by Spotify Connect.",
+                    "playback_mode": playback_mode,
+                    "unavailable_reason": unavailable_reason,
                 }
             )
 
@@ -655,10 +734,15 @@ class SpotifyPlayerViewSet(viewsets.ViewSet):
     def play(self, request):
         try:
             service = self._service()
-            service.play(
-                request.data.get("uri"),
-                device_id=request.data.get("device_id"),
-            )
+            device_id = request.data.get("device_id")
+            speaker = self._homehub_speaker(device_id)
+            if speaker:
+                self._play_homehub_spotify(speaker, request.data.get("uri"))
+            else:
+                service.play(
+                    request.data.get("uri"),
+                    device_id=device_id,
+                )
             return Response({"playback": service.playback()})
         except Exception as exc:
             return Response(
@@ -672,25 +756,32 @@ class SpotifyPlayerViewSet(viewsets.ViewSet):
         device_id = request.data.get("device_id")
         try:
             service = self._service()
+            speaker = self._homehub_speaker(device_id)
+            if speaker and action_name in {"resume", "pause", "next", "previous"}:
+                local_action = "play" if action_name == "resume" else action_name
+                execute_control(speaker, local_action)
+                return Response({"playback": service.playback(), "queue": service.queue()})
+
+            spotify_device_id = None if speaker else device_id
             if action_name == "resume":
-                service.play(device_id=device_id)
+                service.play(device_id=spotify_device_id)
             elif action_name == "pause":
-                service.pause(device_id=device_id)
+                service.pause(device_id=spotify_device_id)
             elif action_name == "next":
-                service.next(device_id=device_id)
+                service.next(device_id=spotify_device_id)
             elif action_name == "previous":
-                service.previous(device_id=device_id)
+                service.previous(device_id=spotify_device_id)
             elif action_name == "shuffle":
-                service.set_shuffle(bool(request.data.get("value")), device_id=device_id)
+                service.set_shuffle(bool(request.data.get("value")), device_id=spotify_device_id)
             elif action_name == "repeat":
-                service.set_repeat(str(request.data.get("value") or "off"), device_id=device_id)
+                service.set_repeat(str(request.data.get("value") or "off"), device_id=spotify_device_id)
             elif action_name == "seek":
-                service.seek(int(request.data.get("position_ms") or 0), device_id=device_id)
+                service.seek(int(request.data.get("position_ms") or 0), device_id=spotify_device_id)
             elif action_name == "queue":
                 uri = str(request.data.get("uri") or "")
                 if not uri:
                     raise RuntimeError("A Spotify URI is required to add an item to the queue.")
-                service.add_to_queue(uri, device_id=device_id)
+                service.add_to_queue(uri, device_id=spotify_device_id)
             else:
                 raise RuntimeError(f"Unknown Spotify player action: {action_name}")
             return Response({"playback": service.playback(), "queue": service.queue()})
@@ -710,7 +801,17 @@ class SpotifyPlayerViewSet(viewsets.ViewSet):
             )
         try:
             service = self._service()
-            service.transfer(device_id, play=bool(request.data.get("play", True)))
+            speaker = self._homehub_speaker(device_id)
+            if speaker:
+                playback = service.playback()
+                uri = (playback.get("item") or {}).get("uri")
+                if not uri:
+                    raise RuntimeError(
+                        "Choose something to play before transferring to this HomeHub speaker."
+                    )
+                self._play_homehub_spotify(speaker, uri)
+            else:
+                service.transfer(device_id, play=bool(request.data.get("play", True)))
             return Response({"playback": service.playback(), "outputs": self._outputs(service)})
         except Exception as exc:
             return Response(
@@ -722,10 +823,13 @@ class SpotifyPlayerViewSet(viewsets.ViewSet):
     def volume(self, request):
         try:
             service = self._service()
-            service.set_volume(
-                int(request.data.get("value") or 0),
-                device_id=request.data.get("device_id"),
-            )
+            device_id = request.data.get("device_id")
+            speaker = self._homehub_speaker(device_id)
+            value = int(request.data.get("value") or 0)
+            if speaker:
+                execute_control(speaker, "volume", {"value": value})
+            else:
+                service.set_volume(value, device_id=device_id)
             return Response({"playback": service.playback()})
         except Exception as exc:
             return Response(
