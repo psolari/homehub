@@ -83,6 +83,19 @@ async def open_hive_session(credentials: dict[str, Any]):
     return hive
 
 
+async def close_hive_session(hive) -> None:
+    """Close pyhive-integration's internally owned aiohttp session."""
+    close = getattr(hive, "close", None)
+    if close is None:
+        close = getattr(getattr(hive, "session", None), "close", None)
+    if close is None:
+        return
+
+    result = close()
+    if hasattr(result, "__await__"):
+        await result
+
+
 def hive_devices(hive) -> list[Any]:
     data = getattr(getattr(hive, "session", None), "data", None)
     devices = getattr(data, "devices", None) or {}
