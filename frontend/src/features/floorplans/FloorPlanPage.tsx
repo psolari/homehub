@@ -99,6 +99,38 @@ export default function FloorPlanPage() {
   planRef.current = plan;
 
   useEffect(() => {
+    let cancelled = false;
+    let refreshInFlight = false;
+
+    const refreshTrackedDevices = async (snapshot?: Device[]) => {
+      if (refreshInFlight) return;
+      refreshInFlight = true;
+      try {
+        const current = snapshot || (await get<Device[]>("/devices/"));
+        if (cancelled) return;
+
+        setDevices(current);
+        const tracked = current.filter((device) => isTrackedVacuum(device));
+        await Promise.allSettled(
+          tracked.map(async (device) => {
+            try {
+              const next = (
+                await post<{ device: Device }>(`/devices/${device.id}/refresh/`)
+              ).device;
+              if (cancelled) return;
+              setDevices((items) =>
+                items.map((item) => (item.id === next.id ? next : item)),
+              );
+            } catch {
+              // The backend keeps the last-known-good state through short MQTT/network blips.
+            }
+          }),
+        );
+      } finally {
+        refreshInFlight = false;
+      }
+    };
+
     const load = async () => {
       let nextPlans = await get<FloorPlan[]>("/floor-plans/");
       if (!nextPlans.length) {
@@ -112,35 +144,30 @@ export default function FloorPlanPage() {
           }),
         ];
       }
+      const currentDevices = await get<Device[]>("/devices/");
+      if (cancelled) return;
+
       setPlans(nextPlans);
-      setDevices(await get<Device[]>("/devices/"));
+      setDevices(currentDevices);
       setPlanId((current) =>
         current && nextPlans.some((item) => item.id === current) ? current : nextPlans[0].id,
       );
-    };
-    void load().catch((reason: Error) => setError(reason.message));
-  }, []);
 
-  useEffect(() => {
-    const refresh = async () => {
-      try {
-        const current = await get<Device[]>("/devices/");
-        const refreshed = await Promise.all(
-          current.map(async (device) => {
-            try {
-              return (await post<{ device: Device }>(`/devices/${device.id}/refresh/`)).device;
-            } catch {
-              return device;
-            }
-          }),
-        );
-        setDevices(refreshed);
-      } catch {
-        // Preserve last-known state if one or more integrations are temporarily offline.
-      }
+      // Start/reuse the Roomba's persistent MQTT tracker immediately. Once it is
+      // running, only tracked vacuums need frequent live refreshes; slow cameras,
+      // speakers and cloud integrations can no longer hold up floor-plan motion.
+      void refreshTrackedDevices(currentDevices);
     };
-    const timer = window.setInterval(refresh, 3500);
-    return () => window.clearInterval(timer);
+
+    void load().catch((reason: Error) => {
+      if (!cancelled) setError(reason.message);
+    });
+    const timer = window.setInterval(() => void refreshTrackedDevices(), 1800);
+
+    return () => {
+      cancelled = true;
+      window.clearInterval(timer);
+    };
   }, []);
 
   const selectedRoom = selection?.kind === "room" ? plan?.rooms.find((room) => room.id === selection.id) || null : null;
