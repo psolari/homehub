@@ -204,7 +204,11 @@ def _discover_cast() -> list[Candidate]:
                     manufacturer="Google",
                     hardware_model=getattr(info, "model_name", "") or "",
                     ip_address=host,
-                    config={"friendly_name": friendly_name},
+                    config={
+                        "friendly_name": friendly_name,
+                        "cast_uuid": uuid,
+                        "cast_model_name": getattr(info, "model_name", "") or "",
+                    },
                     discovery_data={"method": "mdns", "uuid": uuid},
                 )
             )
