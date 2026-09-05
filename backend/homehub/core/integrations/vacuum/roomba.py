@@ -3,10 +3,7 @@ import time
 from homehub.core.integrations.base import BaseDriver, Control, IntegrationError
 from homehub.core.integrations.registry import register_driver
 from homehub.core.services.roomba_cloud_tracking import roomba_cloud_tracking_manager
-from homehub.core.services.roomba_tracking import (
-    build_roomba_state,
-    roomba_tracking_manager,
-)
+from homehub.core.services.roomba_tracking import roomba_tracking_manager
 
 
 @register_driver
@@ -116,9 +113,11 @@ class RoombaDriver(BaseDriver):
         return roomba_tracking_manager.ensure(self.device, self.config)
 
     def _read_tracked(self):
-        client = self._tracked_client()
+        self._tracked_client()
         roomba_tracking_manager.wait_until_ready(self.device.id, timeout=2.5)
-        state = build_roomba_state(client, self.config)
+        state = roomba_tracking_manager.state(self.device.id)
+        if state is None:
+            raise IntegrationError("Roomba tracking session did not start")
 
         # Newer SMART-tier firmware (notably cap.pose=2 i7-family robots)
         # can keep local MQTT state/control working while omitting the old
