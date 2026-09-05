@@ -1,3 +1,5 @@
+from uuid import NAMESPACE_URL, UUID, uuid5
+
 from homehub.core.integrations.base import BaseDriver, Control, IntegrationError
 from homehub.core.integrations.music.spotify import SpotifyService
 from homehub.core.integrations.registry import register_driver
@@ -14,6 +16,20 @@ class GoogleCastDriver(BaseDriver):
         {
             "name": "friendly_name",
             "label": "Cast name",
+            "type": "string",
+            "required": False,
+            "description": "Usually filled automatically from discovery.",
+        },
+        {
+            "name": "cast_uuid",
+            "label": "Cast UUID",
+            "type": "string",
+            "required": False,
+            "description": "Usually filled automatically from discovery.",
+        },
+        {
+            "name": "cast_model_name",
+            "label": "Cast model",
             "type": "string",
             "required": False,
             "description": "Usually filled automatically from discovery.",
@@ -42,7 +58,7 @@ class GoogleCastDriver(BaseDriver):
         "requires_ip": True,
         "instructions": [
             "Keep the speaker powered on and connected to the same network as HomeHub.",
-            "HomeHub will rediscover the Cast target and verify that it can read its playback state.",
+            "HomeHub will connect directly to the saved Cast IP address and verify that it can read its playback state.",
             "Optionally link Spotify to enable Spotify search and Spotify Connect controls.",
         ],
         "optional_accounts": [
@@ -54,7 +70,13 @@ class GoogleCastDriver(BaseDriver):
             }
         ],
         "test_connection": True,
-        "advanced_fields": ["friendly_name", "spotify_device_id", "spotify_device_name"],
+        "advanced_fields": [
+            "friendly_name",
+            "cast_uuid",
+            "cast_model_name",
+            "spotify_device_id",
+            "spotify_device_name",
+        ],
     }
     controls = [
         Control("play", "Play", group="playback"),
@@ -66,27 +88,74 @@ class GoogleCastDriver(BaseDriver):
         Control("spotify_play", "Play from Spotify", type="media_search", group="spotify", parameter="query"),
     ]
 
+    def _cast_uuid(self) -> UUID:
+        configured = str(self.config.get("cast_uuid") or "").strip()
+        if configured:
+            try:
+                return UUID(configured)
+            except ValueError:
+                pass
+
+        identity = (
+            f"homehub-google-cast:{self.device.ip_address}:"
+            f"{self.config.get('friendly_name') or self.device.name}"
+        )
+        return uuid5(NAMESPACE_URL, identity)
+
     def _cast(self):
+        """Open one short-lived direct connection to the saved Cast host.
+
+        HomeHub used to discover the device with mDNS on every refresh, return a
+        Chromecast object tied to that Zeroconf browser, and immediately stop the
+        browser. The socket thread then tried to reconnect through a stopped
+        Zeroconf event loop. Direct-host connections avoid that dependency.
+        """
         import pychromecast
 
-        casts, browser = pychromecast.get_chromecasts(timeout=5)
+        ip = str(self.device.ip_address or "").strip()
+        if not ip:
+            raise IntegrationError("Google Cast device does not have an IP address")
+
+        cast = pychromecast.get_chromecast_from_host(
+            (
+                ip,
+                8009,
+                self._cast_uuid(),
+                str(self.config.get("cast_model_name") or "") or None,
+                str(self.config.get("friendly_name") or self.device.name or "") or None,
+            ),
+            tries=2,
+            retry_wait=0.75,
+            timeout=5,
+        )
         try:
-            ip = str(self.device.ip_address or "")
-            wanted = (self.config.get("friendly_name") or self.device.name).casefold()
-            for cast in casts:
-                info = cast.cast_info
-                if (ip and str(getattr(info, "host", "")) == ip) or str(
-                    getattr(info, "friendly_name", "")
-                ).casefold() == wanted:
-                    cast.wait(timeout=5)
-                    return cast
-            raise IntegrationError("Google Cast device was not found")
+            cast.wait(timeout=5)
+            return cast
+        except Exception:
+            try:
+                cast.disconnect(timeout=1)
+            except Exception:
+                pass
+            raise
+
+    def _with_cast(self, operation):
+        cast = self._cast()
+        try:
+            return operation(cast)
         finally:
-            pychromecast.discovery.stop_discovery(browser)
+            # Every pychromecast connection owns a worker thread. Explicitly
+            # disconnect it so dashboard polling cannot accumulate hundreds of
+            # orphaned threads over time.
+            try:
+                cast.disconnect(timeout=2)
+            except Exception:
+                try:
+                    cast.socket_client.disconnect()
+                except Exception:
+                    pass
 
     async def get_state(self):
-        def read():
-            cast = self._cast()
+        def read(cast):
             status = cast.status
             media = cast.media_controller.status
             return {
@@ -102,11 +171,13 @@ class GoogleCastDriver(BaseDriver):
                 },
             }
 
-        return await self.to_thread(read)
+        return await self.to_thread(self._with_cast, read)
 
     async def _media(self, name):
-        cast = await self.to_thread(self._cast)
-        return await self.to_thread(getattr(cast.media_controller, name))
+        def run(cast):
+            return getattr(cast.media_controller, name)()
+
+        return await self.to_thread(self._with_cast, run)
 
     async def action_play(self):
         return await self._media("play")
@@ -118,24 +189,32 @@ class GoogleCastDriver(BaseDriver):
         return await self._media("stop")
 
     async def action_volume(self, value):
-        cast = await self.to_thread(self._cast)
         value = max(0, min(100, int(value)))
-        await self.to_thread(cast.set_volume, value / 100)
-        return {"volume": value}
+
+        def run(cast):
+            cast.set_volume(value / 100)
+            return {"volume": value}
+
+        return await self.to_thread(self._with_cast, run)
 
     async def action_mute(self, value=True):
-        cast = await self.to_thread(self._cast)
         muted = bool(value)
-        await self.to_thread(cast.set_volume_muted, muted)
-        return {"muted": muted}
+
+        def run(cast):
+            cast.set_volume_muted(muted)
+            return {"muted": muted}
+
+        return await self.to_thread(self._with_cast, run)
 
     async def action_unmute(self):
         return await self.action_mute(False)
 
     async def action_play_uri(self, uri, content_type="audio/mpeg"):
-        cast = await self.to_thread(self._cast)
-        await self.to_thread(cast.media_controller.play_media, uri, content_type)
-        return {"uri": uri}
+        def run(cast):
+            cast.media_controller.play_media(uri, content_type)
+            return {"uri": uri}
+
+        return await self.to_thread(self._with_cast, run)
 
     async def action_spotify_play(self, query):
         service = SpotifyService(
