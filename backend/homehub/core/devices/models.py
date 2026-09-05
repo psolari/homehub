@@ -103,8 +103,9 @@ class DashboardCard(models.Model):
 
 class IntegrationAccount(models.Model):
     PROVIDERS = [
-        ("spotify", "Spotify"), ("hive", "Hive"), ("ring", "Ring"),
-        ("alexa", "Amazon Alexa"), ("ring_alarm_mqtt", "Ring Alarm MQTT"),
+        ("spotify", "Spotify"), ("irobot", "iRobot"), ("hive", "Hive"),
+        ("ring", "Ring"), ("alexa", "Amazon Alexa"),
+        ("ring_alarm_mqtt", "Ring Alarm MQTT"),
     ]
     STATUS_CHOICES = [
         ("disconnected", "Disconnected"), ("connected", "Connected"),
