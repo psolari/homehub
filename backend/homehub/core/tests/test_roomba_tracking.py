@@ -55,6 +55,31 @@ class RoombaTrackingStateTests(SimpleTestCase):
         self.assertEqual(state["status"], "running")
         self.assertEqual(state["battery"], 77)
 
+    def test_reported_pose_beats_stale_zero_compatibility_coordinates(self):
+        client = SimpleNamespace(
+            master_state={
+                "state": {
+                    "reported": {
+                        "pose": {
+                            "point": {"x": 42, "y": 17},
+                            "theta": 30,
+                        },
+                        "cleanMissionStatus": {"phase": "run"},
+                    }
+                }
+            },
+            co_ords={"x": 0, "y": 0, "theta": 180},
+            roomba_connected=True,
+            cleanMissionStatus_phase="run",
+        )
+
+        state = build_roomba_state(client, {})
+
+        self.assertEqual(state["tracking_status"], "live")
+        self.assertEqual(state["location"]["raw_x"], 17.0)
+        self.assertEqual(state["location"]["raw_y"], 42.0)
+        self.assertEqual(state["location"]["heading"], 30.0)
+
     def test_nonzero_public_coordinates_are_used_before_full_pose_merge(self):
         client = SimpleNamespace(
             master_state={
