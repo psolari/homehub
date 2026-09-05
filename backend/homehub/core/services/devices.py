@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 from concurrent.futures import ThreadPoolExecutor
+from datetime import timedelta
 from typing import Any
 
 from django.db import transaction
@@ -12,6 +13,15 @@ from homehub.core.integrations.registry import get_driver
 from homehub.core.models import DashboardCard, Device, DeviceLocation
 from homehub.core.services.device_config import set_device_credentials, split_driver_config
 from homehub.core.services.network import resolve_mac_address
+
+
+REFRESH_FAILURE_THRESHOLD = 3
+REFRESH_FAILURE_GRACE = timedelta(seconds=45)
+_REFRESH_HEALTH_KEYS = {
+    "_refresh_failures",
+    "_refresh_error",
+    "_refresh_degraded",
+}
 
 
 def run_async(awaitable):
@@ -109,8 +119,54 @@ def validate_setup_payload(payload: dict[str, Any]) -> type:
     return driver_class
 
 
+def _clear_refresh_health(state: dict[str, Any]) -> dict[str, Any]:
+    clean = dict(state or {})
+    for key in _REFRESH_HEALTH_KEYS:
+        clean.pop(key, None)
+    return clean
+
+
+def persist_refresh_failure(device: Device, exc: Exception) -> dict[str, Any]:
+    """Keep a last-known-good state through short integration/network blips."""
+    previous = dict(device.state or {})
+    try:
+        failures = int(previous.get("_refresh_failures") or 0) + 1
+    except (TypeError, ValueError):
+        failures = 1
+
+    previous["_refresh_failures"] = failures
+    previous["_refresh_error"] = str(exc) or exc.__class__.__name__
+    previous["_refresh_degraded"] = True
+
+    now = timezone.now()
+    within_grace = bool(
+        device.last_seen
+        and now - device.last_seen <= REFRESH_FAILURE_GRACE
+    )
+    hard_failure = failures >= REFRESH_FAILURE_THRESHOLD and not within_grace
+
+    if hard_failure:
+        previous["online"] = False
+        previous["status"] = "error"
+        previous["error"] = previous["_refresh_error"]
+        device.state = previous
+        device.is_online = False
+        device.status = "error"
+        device.save(update_fields=["state", "is_online", "status"])
+        return previous
+
+    # A single slow response should not make a healthy device flash red/offline.
+    previous["online"] = device.is_online
+    previous["status"] = device.status
+    if device.status != "error":
+        previous.pop("error", None)
+    device.state = previous
+    device.save(update_fields=["state"])
+    return previous
+
+
 def persist_state(device: Device, state: dict[str, Any]) -> Device:
-    state = state or {}
+    state = _clear_refresh_health(state or {})
     device.state = state
     device.is_online = bool(state.get("online", True))
     device.status = _normalise_status(state)
@@ -184,8 +240,7 @@ def refresh_device(device: Device, *, raise_errors: bool = False) -> dict[str, A
         persist_state(device, state)
         return state
     except Exception as exc:
-        state = {"online": False, "status": "error", "error": str(exc)}
-        persist_state(device, state)
+        state = persist_refresh_failure(device, exc)
         if raise_errors:
             raise
         return state
