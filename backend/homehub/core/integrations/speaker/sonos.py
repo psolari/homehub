@@ -10,6 +10,7 @@ class SonosDriver(BaseDriver):
     device_type = "speaker"
     display_name = "Sonos Speaker"
     manufacturer = "Sonos"
+    supports_spotify_output = True
     config_schema = [
         {
             "name": "spotify_account_id",
@@ -142,6 +143,21 @@ class SonosDriver(BaseDriver):
         if value == "queue":
             return await self.to_thread(speaker.play_from_queue, 0)
         raise IntegrationError(f"Unsupported Sonos input: {value}")
+
+    async def play_spotify_uri(self, uri):
+        """Start a Spotify item through Sonos even when Connect omits the speaker."""
+        if not uri:
+            raise IntegrationError("A Spotify URI is required")
+
+        def play():
+            from soco.plugins.sharelink import ShareLinkPlugin
+
+            speaker = self._speaker()
+            queue_number = ShareLinkPlugin(speaker).add_share_link_to_queue(str(uri))
+            speaker.play_from_queue(max(0, int(queue_number) - 1))
+            return {"uri": str(uri), "queue_number": int(queue_number)}
+
+        return await self.to_thread(play)
 
     async def action_spotify_play(self, query):
         account = get_active_account("spotify", account_id=self.config.get("spotify_account_id"))
