@@ -1,4 +1,3 @@
-from types import SimpleNamespace
 from unittest.mock import patch
 
 from django.test import SimpleTestCase
@@ -38,6 +37,9 @@ class RoombaDriverTests(SimpleTestCase):
         "homehub.core.integrations.vacuum.roomba.roomba_cloud_tracking_manager.ensure"
     )
     @patch(
+        "homehub.core.integrations.vacuum.roomba.roomba_tracking_manager.state"
+    )
+    @patch(
         "homehub.core.integrations.vacuum.roomba.roomba_tracking_manager.wait_until_ready"
     )
     @patch(
@@ -47,24 +49,24 @@ class RoombaDriverTests(SimpleTestCase):
         self,
         local_ensure,
         wait_until_ready,
+        local_state,
         cloud_ensure,
         cloud_location,
         cloud_diagnostics,
     ):
-        local_ensure.return_value = SimpleNamespace(
-            master_state={
-                "state": {
-                    "reported": {
-                        "cap": {"pose": 2},
-                        "cleanMissionStatus": {"phase": "run"},
-                        "batPct": 54,
-                    }
-                }
-            },
-            co_ords={"x": 0, "y": 0, "theta": 180},
-            roomba_connected=True,
-            cleanMissionStatus_phase="run",
-        )
+        local_ensure.return_value = object()
+        local_state.return_value = {
+            "online": True,
+            "status": "running",
+            "power": "on",
+            "battery": 54,
+            "phase": "run",
+            "mission": {"phase": "run"},
+            "pose_capability": 2,
+            "location": None,
+            "tracking_status": "waiting_for_pose",
+            "bin_full": False,
+        }
         cloud_location.return_value = {
             "x": 12.3,
             "y": -4.5,
@@ -107,6 +109,9 @@ class RoombaDriverTests(SimpleTestCase):
         "homehub.core.integrations.vacuum.roomba.roomba_cloud_tracking_manager.ensure"
     )
     @patch(
+        "homehub.core.integrations.vacuum.roomba.roomba_tracking_manager.state"
+    )
+    @patch(
         "homehub.core.integrations.vacuum.roomba.roomba_tracking_manager.wait_until_ready"
     )
     @patch(
@@ -116,23 +121,24 @@ class RoombaDriverTests(SimpleTestCase):
         self,
         local_ensure,
         wait_until_ready,
+        local_state,
         cloud_ensure,
         cloud_location,
         cloud_diagnostics,
     ):
-        local_ensure.return_value = SimpleNamespace(
-            master_state={
-                "state": {
-                    "reported": {
-                        "cap": {"pose": 2},
-                        "cleanMissionStatus": {"phase": "run"},
-                    }
-                }
-            },
-            co_ords={"x": 0, "y": 0, "theta": 180},
-            roomba_connected=True,
-            cleanMissionStatus_phase="run",
-        )
+        local_ensure.return_value = object()
+        local_state.return_value = {
+            "online": True,
+            "status": "running",
+            "power": "on",
+            "battery": 54,
+            "phase": "run",
+            "mission": {"phase": "run"},
+            "pose_capability": 2,
+            "location": None,
+            "tracking_status": "waiting_for_pose",
+            "bin_full": False,
+        }
         device = Device(
             id=1,
             name="Roomba",
