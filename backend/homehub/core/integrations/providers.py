@@ -45,6 +45,51 @@ PROVIDER_SCHEMAS = {
         ],
         "auth_type": "oauth",
     },
+    "irobot": {
+        "display_name": "iRobot",
+        "category": "Robot vacuums",
+        "icon": "vacuum",
+        "description": "Connect your iRobot account for cloud-backed live location data on newer Roomba firmware.",
+        "what_it_does": [
+            "Authenticates HomeHub to the same iRobot account used by the mobile app.",
+            "Provides the live-map position stream used by newer SMART-tier Roombas that no longer publish pose coordinates over local MQTT.",
+            "Keeps normal Roomba controls and state retrieval local; the cloud account is only used where the local protocol no longer exposes the required data.",
+        ],
+        "setup_steps": [
+            "Enter the email address and password used by the iRobot Home app.",
+            "Keep the country code set to GB for a UK account.",
+            "Click Test & connect. HomeHub will verify the account and confirm that it can see your robots.",
+            "Existing Roombas configured with a BLID will automatically use this account for live floor-plan tracking when local pose data is unavailable.",
+        ],
+        "notes": [
+            "Some recent Roomba firmware still supports local MQTT control but deliberately omits the old pose field. Live floor-plan movement then requires iRobot's cloud live-map stream.",
+            "If iRobot reports that no MQTT slot is available, fully close the iRobot mobile app and retry.",
+        ],
+        "supports_device_discovery": False,
+        "fields": [
+            {
+                "name": "username",
+                "label": "iRobot email",
+                "type": "string",
+                "description": "The email address used by the iRobot Home app.",
+            },
+            {
+                "name": "password",
+                "label": "iRobot password",
+                "type": "password",
+                "secret": True,
+                "description": "Stored encrypted by HomeHub.",
+            },
+            {
+                "name": "country_code",
+                "label": "Country code",
+                "type": "string",
+                "default": "GB",
+                "description": "Two-letter iRobot account country code. UK accounts normally use GB.",
+            },
+        ],
+        "auth_type": "credentials",
+    },
     "hive": {
         "display_name": "Hive",
         "category": "Heating",
